@@ -1,0 +1,10 @@
+flask
+flask-cors
+google-generativeai
+python-dotenv
+beautifulsoup4
+requests
+pypdf
+flask-sqlalchemy
+flask-bcrypt
+flask-jwt-extended

@@ -1,0 +1,232 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  @apply bg-dark-900 text-white;
+  font-family: 'Inter', sans-serif;
+}
+
+.card-3d {
+  transform-style: preserve-3d;
+  transition: transform 0.3s ease;
+}
+
+.card-3d:hover {
+  transform: translateZ(20px) rotateX(5deg) rotateY(5deg);
+}
+
+/* TipTap Editor Styles */
+.ProseMirror {
+  outline: none;
+  color: #e5e7eb;
+}
+
+.ProseMirror h1 {
+  font-size: 2em;
+  font-weight: bold;
+  margin-top: 0.5em;
+  margin-bottom: 0.3em;
+  color: #f3f4f6;
+  line-height: 1.2;
+}
+
+.ProseMirror h2 {
+  font-size: 1.5em;
+  font-weight: bold;
+  margin-top: 0.4em;
+  margin-bottom: 0.2em;
+  color: #f3f4f6;
+  line-height: 1.3;
+}
+
+.ProseMirror h3 {
+  font-size: 1.25em;
+  font-weight: bold;
+  margin-top: 0.3em;
+  margin-bottom: 0.15em;
+  color: #f3f4f6;
+  line-height: 1.3;
+}
+
+.ProseMirror p {
+  margin-bottom: 0.5em;
+  margin-top: 0.5em;
+  line-height: 1.6;
+}
+
+/* Bullet Lists - Properly styled */
+.ProseMirror ul {
+  list-style-type: disc;
+  padding-left: 1.5rem;
+  margin-bottom: 0.75em;
+  margin-top: 0.75em;
+}
+
+.ProseMirror ul li {
+  margin-bottom: 0.35em;
+  color: #e5e7eb;
+  display: list-item;
+  list-style-position: outside;
+  padding-left: 0.25rem;
+}
+
+.ProseMirror ul li::marker {
+  color: #9ca3af;
+  font-size: 1.1em;
+}
+
+.ProseMirror ul ul {
+  margin-top: 0.25em;
+  margin-bottom: 0.25em;
+}
+
+/* Numbered Lists */
+.ProseMirror ol {
+  list-style-type: decimal;
+  padding-left: 1.5rem;
+  margin-bottom: 0.75em;
+  margin-top: 0.75em;
+}
+
+.ProseMirror ol li {
+  margin-bottom: 0.35em;
+  color: #e5e7eb;
+  display: list-item;
+  list-style-position: outside;
+  padding-left: 0.25rem;
+}
+
+.ProseMirror ol li::marker {
+  color: #9ca3af;
+  font-weight: 600;
+}
+
+.ProseMirror ol ol {
+  margin-top: 0.25em;
+  margin-bottom: 0.25em;
+}
+
+/* Nested lists */
+.ProseMirror li p {
+  margin: 0;
+}
+
+.ProseMirror code {
+  background-color: rgba(255, 255, 255, 0.1);
+  padding: 0.2em 0.4em;
+  border-radius: 0.25em;
+  font-family: 'Courier New', monospace;
+}
+
+.ProseMirror pre {
+  background-color: rgba(0, 0, 0, 0.3);
+  padding: 1em;
+  border-radius: 0.5em;
+  overflow-x: auto;
+  margin-bottom: 0.5em;
+  margin-top: 0.5em;
+}
+
+.ProseMirror mark {
+  background-color: #ffc078;
+  color: #000;
+  padding: 0.1em 0.2em;
+  border-radius: 0.2em;
+}
+
+.ProseMirror strong {
+  font-weight: 700;
+  color: #f3f4f6;
+}
+
+.ProseMirror em {
+  font-style: italic;
+}
+
+/* Math equations */
+.ProseMirror .math-inline,
+.ProseMirror .math-display {
+  color: #60a5fa;
+}
+
+/* Boxed Block Math */
+div[data-type="block-math"] {
+  border: 1px solid #4b5563;
+  padding: 1rem;
+  border-radius: 0.5rem;
+  background-color: rgba(31, 41, 55, 0.5); /* bg-dark-800 with opacity */
+  margin: 1rem 0;
+  overflow-x: auto;
+  display: flex;
+  justify-content: center;
+}
+
+/* Table styles */
+.ProseMirror .tableWrapper {
+  overflow-x: auto;
+}
+
+/* Custom Scrollbar for Table Wrapper */
+.ProseMirror .tableWrapper::-webkit-scrollbar {
+  height: 8px;
+}
+
+.ProseMirror .tableWrapper::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 4px;
+}
+
+.ProseMirror .tableWrapper::-webkit-scrollbar-thumb {
+  background: #3b82f6;
+  border-radius: 4px;
+}
+
+.ProseMirror .tableWrapper::-webkit-scrollbar-thumb:hover {
+  background: #2563eb;
+}
+
+.ProseMirror table {
+  border-collapse: collapse;
+  table-layout: fixed;
+  width: 100%;
+  margin: 1em 0;
+}
+
+.ProseMirror td,
+.ProseMirror th {
+  min-width: 1em;
+  border: 2px solid #4b5563;
+  padding: 0.5em;
+  vertical-align: top;
+  box-sizing: border-box;
+  position: relative;
+  background-color: rgba(55, 65, 81, 0.3);
+}
+
+.ProseMirror th {
+  font-weight: bold;
+  text-align: left;
+  background-color: rgba(59, 130, 246, 0.2);
+}
+
+.ProseMirror .selectedCell {
+  background-color: rgba(96, 165, 250, 0.3);
+}
+
+.ProseMirror .column-resize-handle {
+  position: absolute;
+  right: -2px;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background-color: #3b82f6;
+  pointer-events: none;
+}
+
+.mention {
+  color: #3b82f6;
+  background-color: rgba(59, 130, 246, 0.1);
+  padding: 0.1rem 0.3rem;
+  border-radius: 0.3rem;
+}
