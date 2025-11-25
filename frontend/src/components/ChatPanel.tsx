@@ -18,19 +18,20 @@ interface Attachment {
 interface ChatPanelProps {
   messages: Message[];
   onSendMessage: (message: string, pdfContext?: string) => void;
+  onClearChat: () => void;
   isLoading: boolean;
   mode: ConfirmationMode;
   onModeChange: (mode: ConfirmationMode) => void;
-  attachments?: Attachment[];
+  attachments: Attachment[];
 }
 
-const ChatPanel: React.FC<ChatPanelProps> = ({ messages, onSendMessage, isLoading, mode, onModeChange, attachments = [] }) => {
+const ChatPanel: React.FC<ChatPanelProps> = ({ messages, onSendMessage, onClearChat, isLoading, mode, onModeChange, attachments = [] }) => {
   const [input, setInput] = useState('');
   const [showMentionPopup, setShowMentionPopup] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
   const [showVoiceRecorder, setShowVoiceRecorder] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -40,9 +41,15 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ messages, onSendMessage, isLoadin
     scrollToBottom();
   }, [messages, isLoading]);
 
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const newValue = e.target.value;
     setInput(newValue);
+
+    // Auto-resize textarea
+    if (inputRef.current) {
+      inputRef.current.style.height = 'auto';
+      inputRef.current.style.height = `${inputRef.current.scrollHeight}px`;
+    }
 
     // Check for @ mention
     const lastAtPos = newValue.lastIndexOf('@');
@@ -65,6 +72,20 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ messages, onSendMessage, isLoadin
       setInput(newValue);
       setShowMentionPopup(false);
       inputRef.current?.focus();
+      // Trigger resize after update
+      setTimeout(() => {
+        if (inputRef.current) {
+          inputRef.current.style.height = 'auto';
+          inputRef.current.style.height = `${inputRef.current.scrollHeight}px`;
+        }
+      }, 0);
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSubmit(e);
     }
   };
 
@@ -79,23 +100,24 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ messages, onSendMessage, isLoadin
       // Find mentioned attachments
       const mentionedAttachment = attachments.find(att => input.includes(`@${att.filename}`));
       if (mentionedAttachment && mentionedAttachment.filetype === 'pdf') {
-        // We'll pass the filename or ID to the parent, which will handle fetching the content
-        // Or we can pass a special flag. 
-        // The prompt said "pass the selected attachment's context".
-        // Let's pass the filename for now, and the backend can look it up or we fetch it here?
-        // The plan said "Update Backend to parse mentions".
-        // But we also have `pdfContext` argument in `onSendMessage`.
-        // Let's pass the filename as pdfContext for now, or let the parent handle it.
-        // Actually, the backend needs to know WHICH file to read.
-        // Let's pass the filename in the message or as a separate argument.
-        // The current signature is `onSendMessage(message, pdfContext)`.
-        // Let's pass the filename as `pdfContext`.
         pdfContext = mentionedAttachment.filename;
+      } else {
+        // If no explicit mention, check if there are PDF attachments
+        // Automatically use the most recent PDF (last in the list)
+        const pdfAttachments = attachments.filter(att => att.filetype === 'pdf');
+        if (pdfAttachments.length > 0) {
+          pdfContext = pdfAttachments[pdfAttachments.length - 1].filename;
+        }
       }
 
       onSendMessage(input, pdfContext);
       setInput('');
       setShowMentionPopup(false);
+
+      // Reset height
+      if (inputRef.current) {
+        inputRef.current.style.height = 'auto';
+      }
     }
   };
 
@@ -104,10 +126,22 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ messages, onSendMessage, isLoadin
   );
 
   return (
-    <div className="h-full bg-dark-800 border-l border-dark-700 p-4 flex flex-col relative">
-      <h2 className="text-lg font-bold text-gray-200 mb-4 flex-shrink-0">AI Assistant</h2>
+    <div className="flex flex-col h-full bg-dark-800 border-l border-dark-700 overflow-y-hidden">
+      <div className="p-4 border-b border-dark-700 bg-dark-900/50 backdrop-blur-sm flex justify-between items-center">
+        <h2 className="text-lg font-semibold text-gray-200 flex items-center gap-2">
+          <span className="material-icons text-blue-400 text-sm">smart_toy</span>
+          Lumina Copilot
+        </h2>
+        <button
+          onClick={onClearChat}
+          className="p-1.5 text-gray-400 hover:text-red-400 hover:bg-dark-700 rounded-lg transition-colors"
+          title="Delete Chat"
+        >
+          <span className="material-icons text-sm">delete_outline</span>
+        </button>
+      </div>
 
-      <div className="flex-1 overflow-y-auto pr-2">
+      <div className="flex-1 overflow-y-auto p-4 pr-2">
         <div className="flex flex-col gap-4">
           {messages.map((msg, index) => (
             <div
@@ -121,7 +155,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ messages, onSendMessage, isLoadin
                   : 'bg-dark-700 text-gray-300'
                   }`}
               >
-                <p className="text-sm">{msg.text}</p>
+                <p className="text-sm whitespace-pre-wrap">{msg.text}</p>
               </div>
             </div>
           ))}
@@ -136,7 +170,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ messages, onSendMessage, isLoadin
         </div>
       </div>
 
-      <div className="mt-4 flex-shrink-0 space-y-3 relative">
+      <div className="mt-4 flex-shrink-0 space-y-3 relative p-4 pt-0">
         {/* Mention Popup */}
         {showMentionPopup && filteredAttachments.length > 0 && (
           <div className="absolute bottom-full left-0 w-full mb-2 bg-dark-800 border border-dark-600 rounded-lg shadow-xl overflow-hidden z-50">
@@ -177,49 +211,54 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ messages, onSendMessage, isLoadin
 
         {/* Chat Input Form */}
         <form onSubmit={handleSubmit}>
-          <div className="relative">
-            <input
+          <div className="relative flex items-end gap-2 bg-dark-700 rounded-lg p-2 focus-within:ring-2 focus-within:ring-blue-500 transition-all">
+            <textarea
               ref={inputRef}
-              type="text"
               value={input}
               onChange={handleInputChange}
-              placeholder="Ask the AI to edit your notes... (Type @ to mention attachment)"
+              onKeyDown={handleKeyDown}
+              placeholder="Ask the AI... (@ to mention)"
               disabled={isLoading}
-              className="w-full p-3 pr-24 rounded-lg bg-dark-700 text-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all disabled:opacity-50"
+              rows={2}
+              className="w-full bg-transparent text-gray-300 focus:outline-none resize-none max-h-32 py-2 px-1 text-sm scrollbar-thin scrollbar-thumb-dark-600 scrollbar-track-transparent"
+              style={{ minHeight: '3rem' }}
             />
-            {/* Voice Recorder Button */}
-            <button
-              type="button"
-              onClick={() => setShowVoiceRecorder(true)}
-              className="absolute right-14 top-1/2 -translate-y-1/2 w-8 h-8 flex items-center justify-center rounded-md bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white transition-all"
-              title="Record audio"
-            >
-              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z" />
-                <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z" />
-              </svg>
-            </button>
-            {/* Send Button */}
-            <button
-              type="submit"
-              disabled={isLoading || !input.trim()}
-              className="absolute right-2 top-1/2 -translate-y-1/2 w-8 h-8 flex items-center justify-center rounded-md bg-blue-600 hover:bg-blue-500 text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <span className="material-symbols-outlined text-lg">send</span>
-            </button>
+
+            <div className="flex flex-col gap-2 pb-1">
+              {/* Voice Recorder Button */}
+              <button
+                type="button"
+                onClick={() => setShowVoiceRecorder(true)}
+                className="w-8 h-8 flex items-center justify-center rounded-md text-gray-400 hover:text-purple-400 hover:bg-dark-600 transition-all"
+                title="Record audio"
+              >
+                <span className="material-icons text-xl">mic</span>
+              </button>
+
+              {/* Send Button */}
+              <button
+                type="submit"
+                disabled={isLoading || !input.trim()}
+                className="w-8 h-8 flex items-center justify-center rounded-md bg-blue-600 hover:bg-blue-500 text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <span className="material-symbols-outlined text-lg">send</span>
+              </button>
+            </div>
           </div>
         </form>
       </div>
 
       {/* Voice Recorder Modal */}
       {showVoiceRecorder && (
-        <VoiceRecorder
-          onTranscriptionComplete={(text) => {
-            setInput(text);
-            setShowVoiceRecorder(false);
-          }}
-          onClose={() => setShowVoiceRecorder(false)}
-        />
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <VoiceRecorder
+            onTranscript={(text) => {
+              setInput(prev => prev + ' ' + text);
+              setShowVoiceRecorder(false);
+            }}
+            onClose={() => setShowVoiceRecorder(false)}
+          />
+        </div>
       )}
     </div>
   );

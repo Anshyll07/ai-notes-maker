@@ -113,4 +113,4 @@ MIT License
 
 ## Author
 
-Created with ❤️ using Gemini AI
+Created with ❤️

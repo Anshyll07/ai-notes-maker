@@ -45,7 +45,7 @@ const Login: React.FC<LoginProps> = ({ onSwitchToSignup }) => {
     return (
         <div className="min-h-screen flex items-center justify-center bg-dark-900 text-white">
             <div className="bg-dark-800 p-8 rounded-lg shadow-xl w-full max-w-md border border-dark-700">
-                <h2 className="text-2xl font-bold mb-6 text-center">Login to AI Notes</h2>
+                <h2 className="text-2xl font-bold mb-6 text-center">Login to Lumina Notes</h2>
 
                 {error && (
                     <div className="bg-red-500/10 border border-red-500/50 text-red-400 p-3 rounded mb-4 text-sm">

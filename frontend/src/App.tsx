@@ -428,6 +428,21 @@ function AuthenticatedApp() {
 
 
 
+  const handleClearChat = async () => {
+    if (!activeNoteId) return;
+    try {
+      const response = await fetch(`${API_URL}/notes/${activeNoteId}/chat`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (response.ok) {
+        setMessages([]);
+      }
+    } catch (error) {
+      console.error('Failed to clear chat:', error);
+    }
+  };
+
   const handleReorderNotes = (newOrder: Note[]) => {
     setNotes(newOrder);
     const newOrderIds = newOrder.map(n => n.id);
@@ -500,10 +515,11 @@ function AuthenticatedApp() {
           </div>
         </div>
 
-        <div className="w-[350px] flex-shrink-0 h-full border-l border-dark-700/50 bg-dark-800/30 backdrop-blur-sm">
+        <div className="w-[450px] flex-shrink-0 h-full border-l border-dark-700/50 bg-dark-800/30 backdrop-blur-sm">
           <ChatPanel
             messages={messages}
             onSendMessage={handleSendMessage}
+            onClearChat={handleClearChat}
             isLoading={isLoading}
             mode={confirmationMode}
             onModeChange={setConfirmationMode}

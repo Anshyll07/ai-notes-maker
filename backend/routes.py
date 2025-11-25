@@ -1,5 +1,5 @@
 from flask import Blueprint, request, jsonify, send_from_directory
-from services import chat_with_ai
+from services import chat_with_ai, extract_text_from_pdf
 from models import db, User, Note, ChatMessage, Folder, Attachment
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
 from flask_bcrypt import Bcrypt
@@ -149,6 +149,23 @@ def update_note(note_id):
     db.session.commit()
     return jsonify({'message': 'Note updated'}), 200
 
+def cleanup_attachment_files(attachment):
+    """Helper to delete attachment file and its summary from disk."""
+    try:
+        filepath = os.path.join(UPLOAD_FOLDER, attachment.filepath)
+        if os.path.exists(filepath):
+            os.remove(filepath)
+            print(f"DEBUG: Deleted file {filepath}")
+        
+        # Remove summary file if exists
+        summary_path = filepath + '.json'
+        if os.path.exists(summary_path):
+            os.remove(summary_path)
+            print(f"DEBUG: Deleted summary {summary_path}")
+            
+    except Exception as e:
+        print(f"Error deleting file {attachment.filepath}: {e}")
+
 @api_bp.route('/notes/<note_id>', methods=['DELETE'])
 @jwt_required()
 def delete_note(note_id):
@@ -157,6 +174,10 @@ def delete_note(note_id):
     
     if not note:
         return jsonify({'error': 'Note not found'}), 404
+    
+    # Delete attachment files from disk
+    for attachment in note.attachments:
+        cleanup_attachment_files(attachment)
         
     db.session.delete(note)
     db.session.commit()
@@ -195,6 +216,19 @@ def upload_attachment(note_id):
         )
         db.session.add(new_attachment)
         db.session.commit()
+        
+        # Generate summary for PDF
+        if filetype == 'pdf':
+            try:
+                from services import summarize_pdf
+                summary = summarize_pdf(filepath)
+                
+                # Save summary to sidecar JSON file
+                summary_path = filepath + '.json'
+                with open(summary_path, 'w') as f:
+                    json.dump({'summary': summary}, f)
+            except Exception as e:
+                print(f"Error generating summary: {e}")
 
         return jsonify({
             'id': new_attachment.id,
@@ -222,12 +256,8 @@ def delete_attachment(attachment_id):
     if not note or note.user_id != current_user_id:
         return jsonify({'error': 'Unauthorized'}), 403
 
-    try:
-        filepath = os.path.join(UPLOAD_FOLDER, attachment.filepath)
-        if os.path.exists(filepath):
-            os.remove(filepath)
-    except Exception as e:
-        print(f"Error deleting file {filepath}: {e}")
+    # Clean up files from disk
+    cleanup_attachment_files(attachment)
 
     db.session.delete(attachment)
     db.session.commit()
@@ -250,6 +280,41 @@ def get_chat_history(note_id):
     chat_history = [{'sender': msg.sender, 'text': msg.text} for msg in messages]
     return jsonify(chat_history), 200
 
+@api_bp.route('/notes/<note_id>/chat', methods=['DELETE'])
+@jwt_required()
+def delete_chat_history(note_id):
+    current_user_id = int(get_jwt_identity())
+    note = Note.query.filter_by(id=note_id, user_id=current_user_id).first()
+    
+    if not note:
+        return jsonify({'error': 'Note not found'}), 404
+        
+    # Delete all chat messages for this note
+    ChatMessage.query.filter_by(note_id=note_id).delete()
+    db.session.commit()
+    
+    return jsonify({'message': 'Chat history cleared'}), 200
+
+@api_bp.route('/folders', methods=['GET'])
+@jwt_required()
+def get_folders():
+    current_user_id = int(get_jwt_identity())
+    folders = Folder.query.filter_by(user_id=current_user_id).order_by(Folder.created_at.desc()).all()
+    
+    folders_data = []
+    for folder in folders:
+        folders_data.append({
+            'id': folder.id,
+            'name': folder.name,
+            'color': folder.color,
+            'icon': folder.icon,
+            'createdAt': int(folder.created_at.timestamp() * 1000),
+            'updatedAt': int(folder.updated_at.timestamp() * 1000)
+        })
+    
+    return jsonify(folders_data), 200
+
+@api_bp.route('/folders', methods=['POST'])
 @jwt_required()
 def create_folder():
     current_user_id = int(get_jwt_identity())
@@ -390,10 +455,22 @@ def chat():
     if pdf_context_filename:
         # Find the attachment
         attachment = Attachment.query.filter_by(note_id=note_id, filename=pdf_context_filename).first()
+
         if attachment and attachment.filetype == 'pdf':
             file_path = os.path.join(UPLOAD_FOLDER, attachment.filepath)
             if os.path.exists(file_path):
                 pdf_context_path = file_path
+    
+    # Get PDF context if provided (for legacy/direct support)
+    # This overrides the attachment-based pdf_context_path if pdf_filename is provided via args
+    pdf_filename = request.args.get('pdf_filename')
+    
+    if pdf_filename:
+        # Security check: ensure filename is in uploads
+        # We assume pdf_filename is just the basename
+        pdf_context_path = os.path.join(UPLOAD_FOLDER, secure_filename(pdf_filename))
+        if not os.path.exists(pdf_context_path):
+            pdf_context_path = None
 
     # Get chat history
     history = ChatMessage.query.filter_by(note_id=note_id).order_by(ChatMessage.timestamp.asc()).all()
@@ -410,7 +487,8 @@ def chat():
             mode,
             chat_history=chat_history[:-1], # Exclude the current message as it's passed as 'message'
             pdf_context_path=pdf_context_path,
-            selected_text=selected_text
+            selected_text=selected_text,
+            pdf_filename=pdf_filename # Pass the potentially new pdf_filename
         )
         
         response_text = response_data.get('response_text')

@@ -1,18 +1,23 @@
-import React, { useState, useEffect, forwardRef, useImperativeHandle } from 'react';
+import React, { forwardRef, useEffect, useImperativeHandle, useState } from 'react';
+import { Note } from '../App';
 
-export default forwardRef((props, ref) => {
+interface MentionListProps {
+    items: Note[];
+    command: (props: { id: string; label: string }) => void;
+}
+
+export const MentionList = forwardRef((props: MentionListProps, ref) => {
     const [selectedIndex, setSelectedIndex] = useState(0);
 
-    const selectItem = (index) => {
+    const selectItem = (index: number) => {
         const item = props.items[index];
-
         if (item) {
-            props.command({ id: item.filename, label: item.filename });
+            props.command({ id: item.id, label: item.title });
         }
     };
 
     const upHandler = () => {
-        setSelectedIndex(((selectedIndex + props.items.length) - 1) % props.items.length);
+        setSelectedIndex((selectedIndex + props.items.length - 1) % props.items.length);
     };
 
     const downHandler = () => {
@@ -26,7 +31,7 @@ export default forwardRef((props, ref) => {
     useEffect(() => setSelectedIndex(0), [props.items]);
 
     useImperativeHandle(ref, () => ({
-        onKeyDown: ({ event }) => {
+        onKeyDown: ({ event }: { event: KeyboardEvent }) => {
             if (event.key === 'ArrowUp') {
                 upHandler();
                 return true;
@@ -47,20 +52,24 @@ export default forwardRef((props, ref) => {
     }));
 
     return (
-        <div className="bg-dark-800 border border-dark-700 rounded-lg shadow-xl p-2">
+        <div className="bg-dark-800 border border-dark-700 rounded-lg shadow-xl overflow-hidden min-w-[200px]">
             {props.items.length ? (
                 props.items.map((item, index) => (
                     <button
-                        className={`w-full text-left p-2 rounded-md text-sm ${index === selectedIndex ? 'bg-dark-700' : ''}`}
-                        key={index}
+                        className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 ${index === selectedIndex ? 'bg-blue-600 text-white' : 'text-gray-300 hover:bg-dark-700'
+                            }`}
+                        key={item.id}
                         onClick={() => selectItem(index)}
                     >
-                        {item.filename}
+                        <span>{item.icon || '📝'}</span>
+                        <span className="truncate">{item.title}</span>
                     </button>
                 ))
             ) : (
-                <div className="p-2 text-sm text-gray-500">No result</div>
+                <div className="px-3 py-2 text-sm text-gray-500">No notes found</div>
             )}
         </div>
     );
 });
+
+export default MentionList;

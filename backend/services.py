@@ -5,6 +5,8 @@ from dotenv import load_dotenv
 from googlesearch import search
 from google import genai
 from google.genai import types
+import pypdf
+import io
 
 load_dotenv()
 
@@ -19,9 +21,13 @@ def format_latex_for_tiptap(text):
     """Formats LaTeX strings for Tiptap Mathematics extension."""
     # Block math: $$...$$ -> <div data-type="block-math" data-latex="..."></div>
     text = re.sub(r'\$\$(.*?)\$\$', r'<div data-type="block-math" data-latex="\1"></div>', text, flags=re.DOTALL)
+    # Block math: \[...\] -> <div data-type="block-math" data-latex="..."></div>
+    text = re.sub(r'\\\[(.*?)\\\]', r'<div data-type="block-math" data-latex="\1"></div>', text, flags=re.DOTALL)
     
     # Inline math: $...$ -> <span data-type="inline-math" data-latex="..."></span>
     text = re.sub(r'\$([^$]+)\$', r'<span data-type="inline-math" data-latex="\1"></span>', text)
+    # Inline math: \(...\) -> <span data-type="inline-math" data-latex="..."></span>
+    text = re.sub(r'\\\((.*?)\\\)', r'<span data-type="inline-math" data-latex="\1"></span>', text)
     return text
 
 def execute_google_search(query):
@@ -31,6 +37,18 @@ def execute_google_search(query):
         return "\n".join([f"- {result}" for result in search_results])
     except Exception as e:
         return f"An error occurred during search: {str(e)}"
+
+def extract_text_from_pdf(file_stream):
+    """Extracts text from a PDF file stream."""
+    try:
+        reader = pypdf.PdfReader(file_stream)
+        text = ""
+        for page in reader.pages:
+            text += page.extract_text() + "\n"
+        return text
+    except Exception as e:
+        print(f"Error extracting text from PDF: {e}")
+        raise e
 
 # Define a base prompt that includes all the AI's capabilities
 BASE_PROMPT_CAPABILITIES = """
@@ -63,7 +81,7 @@ When asked to beautify, format, or style, use these tags:
 - **Never** use inline LaTeX `$ ... $` unless it is embedded strictly within a sentence and cannot be separated. But prefer block math `$$...$$` whenever possible for better visibility.
 """
 
-def chat_with_ai(user_message, note_content, confirmation_mode, chat_history=None, pdf_context_path=None, selected_text=None):
+def chat_with_ai(user_message, note_content, confirmation_mode, chat_history=None, pdf_context_path=None, selected_text=None, pdf_filename=None):
     if not API_KEY or not client:
         return {
             "response_text": "Error: Gemini API Key not configured.",
@@ -116,7 +134,7 @@ def chat_with_ai(user_message, note_content, confirmation_mode, chat_history=Non
         "{selected_text if selected_text else 'No text selected'}"
 
         PDF CONTEXT:
-        { "A PDF file has been attached for context." if pdf_part else f"No PDF uploaded. {(f'(Upload Error: {upload_error})' if upload_error else '')}" }
+        { f"A PDF file named '{pdf_filename}' has been attached for context." if pdf_part else f"No PDF uploaded. {(f'(Upload Error: {upload_error})' if upload_error else '')}" }
         """
         
         # Prepare contents for first pass
@@ -176,7 +194,7 @@ def chat_with_ai(user_message, note_content, confirmation_mode, chat_history=Non
         "{selected_text if selected_text else 'No text selected'}"
         
         PDF CONTEXT:
-        { "A PDF file has been attached for context." if pdf_part else f"No PDF uploaded. {(f'(Upload Error: {upload_error})' if upload_error else '')}" }
+        { f"A PDF file named '{pdf_filename}' has been attached for context." if pdf_part else f"No PDF uploaded. {(f'(Upload Error: {upload_error})' if upload_error else '')}" }
 
         {search_results_context}
 
@@ -286,6 +304,7 @@ def transcribe_audio_with_ai(audio_path):
         if converted_path and os.path.exists(converted_path):
             os.unlink(converted_path)
         
+        
         if not response.text or response.text.strip() == "":
             raise Exception("Gemini returned empty transcription")
         
@@ -302,3 +321,190 @@ def transcribe_audio_with_ai(audio_path):
                 pass
         
         raise Exception(f"Transcription failed: {str(e)}")
+
+def summarize_pdf(file_path):
+    """Generates a summary of the PDF content using Gemini."""
+    if not API_KEY or not client:
+        return "Summary unavailable (API Key missing)."
+    
+    try:
+        print(f"DEBUG: Summarizing PDF: {file_path}")
+        with open(file_path, 'rb') as f:
+            pdf_data = f.read()
+        
+        pdf_part = types.Part.from_bytes(
+            data=pdf_data,
+            mime_type='application/pdf'
+        )
+        
+        prompt = "Please provide a concise summary of this document (max 2-3 sentences) describing what it contains. This summary will be used to decide if this document is relevant to a user's query."
+        
+        response = client.models.generate_content(
+            model=MODEL_NAME,
+            contents=[prompt, pdf_part]
+        )
+        
+        return response.text.strip()
+    except Exception as e:
+        print(f"Error summarizing PDF: {e}")
+        return "Summary unavailable (Error)."
+
+def clean_json_string(json_str):
+    """Cleans a JSON string by removing control characters and markdown formatting."""
+    # Remove markdown code blocks
+    json_str = json_str.strip().replace('```json', '').replace('```', '').strip()
+    
+    # Robust backslash escaping using a manual loop
+    # We want to escape backslashes that are NOT part of a valid JSON escape sequence.
+    # Valid JSON escapes: \" \\ \/ \b \f \n \r \t \uXXXX
+    # However, for LaTeX content, \f (form feed) is usually \frac, \t is \text, etc.
+    # So we will treat \b, \f, \n, \r, \t as "invalid" (i.e., needing escape) to preserve the literal backslash for LaTeX.
+    # We will ONLY preserve \", \\, \/, and valid \uXXXX.
+    
+    result = []
+    i = 0
+    n = len(json_str)
+    
+    while i < n:
+        char = json_str[i]
+        
+        if char == '\\':
+            # Check next char
+            if i + 1 < n:
+                next_char = json_str[i+1]
+                
+                # Preserve \" (quote), \\ (backslash), \/ (slash), \n (newline), \r (return)
+                if next_char in '"\\/nr':
+                    result.append('\\')
+                    result.append(next_char)
+                    i += 2
+                    continue
+                
+                # Check for unicode \uXXXX
+                elif next_char == 'u':
+                    # Check if next 4 chars are hex
+                    if i + 5 < n:
+                        hex_chars = json_str[i+2:i+6]
+                        import string
+                        if all(c in string.hexdigits for c in hex_chars):
+                            # Valid unicode, preserve it
+                            result.append('\\u')
+                            result.append(hex_chars)
+                            i += 6
+                            continue
+                    
+                    # Not valid unicode, escape the backslash
+                    result.append('\\\\')
+                    i += 1
+                    continue
+                
+                else:
+                    # All other follows (b, f, n, r, t, and other chars) -> Escape the backslash
+                    # This turns \frac into \\frac, \n into \\n, \alpha into \\alpha
+                    result.append('\\\\')
+                    i += 1
+                    continue
+            else:
+                # Backslash at end of string -> Escape it
+                result.append('\\\\')
+                i += 1
+                continue
+        else:
+            result.append(char)
+            i += 1
+            
+    return "".join(result)
+
+def chat_with_ai(user_message, note_content, confirmation_mode, chat_history=None, pdf_context_path=None, selected_text=None, pdf_filename=None, available_attachments=None):
+    if not API_KEY or not client:
+        return {
+            "response_text": "Error: Gemini API Key not configured.",
+            "updated_html": note_content,
+            "requires_confirmation": True
+        }
+
+    try:
+        print(f"DEBUG: Starting chat_with_ai. Message: {user_message[:50]}...")
+        
+        # --- Single Pass: Generate Answer ---
+        contents = []
+        
+        # Load PDF if provided
+        if pdf_context_path:
+            print(f"DEBUG: Loading PDF context: {pdf_context_path}")
+            try:
+                with open(pdf_context_path, 'rb') as f:
+                    pdf_data = f.read()
+                pdf_part = types.Part.from_bytes(
+                    data=pdf_data,
+                    mime_type='application/pdf'
+                )
+                contents.append(pdf_part)
+            except Exception as e:
+                print(f"DEBUG: Error reading PDF: {e}")
+                # We continue without the PDF if it fails
+
+        # Construct Prompt
+        prompt = f"""You are an expert writing assistant.
+        {BASE_PROMPT_CAPABILITIES}
+
+        You MUST return a single, valid JSON object with the following exact schema:
+        {{
+          "response_text": "A short, conversational reply.",
+          "updated_html": "The full, new HTML content.",
+          "requires_confirmation": "boolean"
+        }}
+
+        ORIGINAL USER REQUEST:
+        "{user_message}"
+        
+        CURRENT NOTE CONTENT:
+        ```html
+        {note_content}
+        ```
+
+        USER SELECTED TEXT:
+        "{selected_text if selected_text else 'No text selected'}"
+        
+        INSTRUCTIONS:
+        1. If the user asks to edit the note, provide the FULL updated HTML in `updated_html`.
+        2. If the user asks a question, answer it in `response_text` and keep `updated_html` same as `note_content` (or empty if no change).
+        3. If `requires_confirmation` is true, the UI will ask the user to confirm changes.
+        4. Use the provided PDF context (if any) to answer questions or generate content.
+        """
+        
+        contents.append(prompt)
+
+        print("DEBUG: Calling model for response")
+        response_raw = client.models.generate_content(
+            model=MODEL_NAME,
+            contents=contents,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json"
+            )
+        )
+        
+        try:
+            response_json = json.loads(clean_json_string(response_raw.text), strict=False)
+            
+            # Format LaTeX in updated_html
+            if "updated_html" in response_json:
+                response_json["updated_html"] = format_latex_for_tiptap(response_json["updated_html"])
+
+            return response_json
+        except json.JSONDecodeError as e:
+            print(f"JSON Parse Error: {e}. Raw: {response_raw.text}")
+            return {
+                "response_text": "I encountered an error processing the response.",
+                "updated_html": note_content,
+                "requires_confirmation": False
+            }
+
+    except Exception as e:
+        print(f"DEBUG: Error in chat_with_ai: {e}")
+        error_response = {
+            "response_text": f"Sorry, I encountered an error: {str(e)}",
+            "updated_html": note_content,
+            "requires_confirmation": True
+        }
+        return error_response
