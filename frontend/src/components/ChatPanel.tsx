@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import VoiceRecorder from './VoiceRecorder';
 
 type ConfirmationMode = 'always' | 'never' | 'think';
 
@@ -27,6 +28,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ messages, onSendMessage, isLoadin
   const [input, setInput] = useState('');
   const [showMentionPopup, setShowMentionPopup] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
+  const [showVoiceRecorder, setShowVoiceRecorder] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -183,8 +185,21 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ messages, onSendMessage, isLoadin
               onChange={handleInputChange}
               placeholder="Ask the AI to edit your notes... (Type @ to mention attachment)"
               disabled={isLoading}
-              className="w-full p-3 pr-12 rounded-lg bg-dark-700 text-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all disabled:opacity-50"
+              className="w-full p-3 pr-24 rounded-lg bg-dark-700 text-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all disabled:opacity-50"
             />
+            {/* Voice Recorder Button */}
+            <button
+              type="button"
+              onClick={() => setShowVoiceRecorder(true)}
+              className="absolute right-14 top-1/2 -translate-y-1/2 w-8 h-8 flex items-center justify-center rounded-md bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white transition-all"
+              title="Record audio"
+            >
+              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z" />
+                <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z" />
+              </svg>
+            </button>
+            {/* Send Button */}
             <button
               type="submit"
               disabled={isLoading || !input.trim()}
@@ -195,6 +210,17 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ messages, onSendMessage, isLoadin
           </div>
         </form>
       </div>
+
+      {/* Voice Recorder Modal */}
+      {showVoiceRecorder && (
+        <VoiceRecorder
+          onTranscriptionComplete={(text) => {
+            setInput(text);
+            setShowVoiceRecorder(false);
+          }}
+          onClose={() => setShowVoiceRecorder(false)}
+        />
+      )}
     </div>
   );
 };

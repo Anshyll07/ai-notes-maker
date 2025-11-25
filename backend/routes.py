@@ -432,3 +432,58 @@ def chat():
     except Exception as e:
         print(f"AI Error: {e}")
         return jsonify({'error': str(e)}), 500
+
+@api_bp.route('/transcribe_audio', methods=['POST'])
+@jwt_required()
+def transcribe_audio():
+    """Transcribe audio using Gemini AI"""
+    current_user_id = int(get_jwt_identity())
+    
+    if 'audio' not in request.files:
+        return jsonify({'error': 'No audio file provided'}), 400
+    
+    audio_file = request.files['audio']
+    if audio_file.filename == '':
+        return jsonify({'error': 'No file selected'}), 400
+    
+    audio_path = None
+    try:
+        # Create audio directory if not exists
+        audio_dir = os.path.join(UPLOAD_FOLDER, 'audio')
+        os.makedirs(audio_dir, exist_ok=True)
+        
+        # Generate unique filename
+        unique_filename = f"{uuid.uuid4()}.webm"
+        audio_path = os.path.join(audio_dir, unique_filename)
+        
+        # Save audio file
+        print(f"DEBUG: Saving audio to {audio_path}")
+        audio_file.save(audio_path)
+        print(f"DEBUG: Audio saved successfully, size: {os.path.getsize(audio_path)} bytes")
+        
+        # Get transcription from AI service
+        from services import transcribe_audio_with_ai
+        print(f"DEBUG: Calling transcribe_audio_with_ai")
+        transcription = transcribe_audio_with_ai(audio_path)
+        print(f"DEBUG: Transcription received: {transcription[:50]}...")
+        
+        # Clean up audio file
+        if os.path.exists(audio_path):
+            os.unlink(audio_path)
+            print(f"DEBUG: Audio file deleted")
+        
+        return jsonify({'transcription': transcription}), 200
+    
+    except Exception as e:
+        print(f"ERROR: Transcription failed: {e}")
+        import traceback
+        traceback.print_exc()
+        
+        # Clean up on error
+        if audio_path and os.path.exists(audio_path):
+            try:
+                os.unlink(audio_path)
+            except:
+                pass
+        
+        return jsonify({'error': f'Transcription failed: {str(e)}'}), 500

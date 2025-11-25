@@ -116,7 +116,7 @@ def chat_with_ai(user_message, note_content, confirmation_mode, chat_history=Non
         "{selected_text if selected_text else 'No text selected'}"
 
         PDF CONTEXT:
-        { "A PDF file has been attached for context." if pdf_part else f"No PDF uploaded. {f'(Upload Error: {upload_error})' if upload_error else ''}" }
+        { "A PDF file has been attached for context." if pdf_part else f"No PDF uploaded. {(f'(Upload Error: {upload_error})' if upload_error else '')}" }
         """
         
         # Prepare contents for first pass
@@ -149,7 +149,7 @@ def chat_with_ai(user_message, note_content, confirmation_mode, chat_history=Non
                 response_mentions_search = True
             else:
                 # Fallback if query is missing
-                search_results_context = "\n\n--- SEARCH FAILED: Query missing ---\n"
+                search_results_context = "\n\n--- SEARCH FAILED: Query missing ---"
                 response_mentions_search = True
         
         # --- Second Pass: Generate Final Answer (after tool use or directly) ---
@@ -176,7 +176,7 @@ def chat_with_ai(user_message, note_content, confirmation_mode, chat_history=Non
         "{selected_text if selected_text else 'No text selected'}"
         
         PDF CONTEXT:
-        { "A PDF file has been attached for context." if pdf_part else f"No PDF uploaded. {f'(Upload Error: {upload_error})' if upload_error else ''}" }
+        { "A PDF file has been attached for context." if pdf_part else f"No PDF uploaded. {(f'(Upload Error: {upload_error})' if upload_error else '')}" }
 
         {search_results_context}
 
@@ -229,3 +229,76 @@ def chat_with_ai(user_message, note_content, confirmation_mode, chat_history=Non
             "requires_confirmation": True
         }
         return error_response
+
+def transcribe_audio_with_ai(audio_path):
+    """Transcribe audio file using Gemini AI"""
+    if not API_KEY or not client:
+        raise Exception("Gemini API Key not configured.")
+    
+    converted_path = None
+    try:
+        print(f"DEBUG: Transcribing audio: {audio_path}")
+        
+        # Verify file exists
+        if not os.path.exists(audio_path):
+            raise Exception(f"Audio file not found: {audio_path}")
+        
+        # Check file size
+        file_size = os.path.getsize(audio_path)
+        print(f"DEBUG: Audio file size: {file_size} bytes")
+        
+        if file_size == 0:
+            raise Exception("Audio file is empty")
+        
+        # Convert WebM to MP3 for better compatibility
+        try:
+            from pydub import AudioSegment
+            print(f"DEBUG: Converting WebM to MP3...")
+            
+            audio = AudioSegment.from_file(audio_path, format="webm")
+            converted_path = audio_path.replace('.webm', '.mp3')
+            audio.export(converted_path, format="mp3")
+            
+            upload_path = converted_path
+            print(f"DEBUG: Converted to MP3: {converted_path}")
+        except ImportError:
+            print(f"DEBUG: pydub not available, using WebM directly")
+            upload_path = audio_path
+        except Exception as conv_error:
+            print(f"DEBUG: Conversion failed: {conv_error}, using WebM directly")
+            upload_path = audio_path
+        
+        # Upload audio file
+        print(f"DEBUG: Uploading audio file to Gemini API...")
+        myfile = client.files.upload(file=upload_path)
+        print(f"DEBUG: Audio uploaded: {myfile.name}")
+        
+        # Generate transcription
+        print(f"DEBUG: Requesting transcription from Gemini...")
+        response = client.models.generate_content(
+            model=MODEL_NAME,
+            contents=["Please transcribe this audio clip. Provide only the transcribed text, nothing else.", myfile]
+        )
+        
+        print(f"DEBUG: Transcription received successfully")
+        
+        # Cleanup converted file
+        if converted_path and os.path.exists(converted_path):
+            os.unlink(converted_path)
+        
+        if not response.text or response.text.strip() == "":
+            raise Exception("Gemini returned empty transcription")
+        
+        return response.text
+        
+    except Exception as e:
+        print(f"ERROR: Error transcribing audio: {e}")
+        
+        # Cleanup on error
+        if converted_path and os.path.exists(converted_path):
+            try:
+                os.unlink(converted_path)
+            except:
+                pass
+        
+        raise Exception(f"Transcription failed: {str(e)}")

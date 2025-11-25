@@ -1,4 +1,4 @@
-import React, { useRef, MouseEvent } from 'react';
+import React, { useRef, MouseEvent, useState } from 'react';
 import { motion } from 'framer-motion';
 
 interface NoteEditorProps {
@@ -6,12 +6,13 @@ interface NoteEditorProps {
     value: string;
     onChange: (value: string) => void;
     attachments: any[];
-    onFileUpload: (file: File, noteId: string) => void;
+    onFileUpload: (file: File, noteId:string) => void;
     onAttachmentClick: (attachment: any) => void;
 }
 
 const NoteEditor: React.FC<NoteEditorProps> = ({ noteId, value, onChange, attachments, onFileUpload, onAttachmentClick }) => {
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const [zoom, setZoom] = useState(1);
 
     const handleFileButtonClick = (event: MouseEvent<HTMLButtonElement>) => {
         event.preventDefault(); // Prevent form submission
@@ -26,6 +27,14 @@ const NoteEditor: React.FC<NoteEditorProps> = ({ noteId, value, onChange, attach
             }
             event.target.value = ''; // Clear the input after selection
         }
+    };
+
+    const handleZoomIn = () => {
+        setZoom(prevZoom => prevZoom * 1.1);
+    };
+
+    const handleZoomOut = () => {
+        setZoom(prevZoom => prevZoom / 1.1);
     };
 
     return (
@@ -43,19 +52,30 @@ const NoteEditor: React.FC<NoteEditorProps> = ({ noteId, value, onChange, attach
                 >
                     Attach File
                 </button>
-                <input
-                    type="file"
-                    ref={fileInputRef}
-                    onChange={handleFileChange}
-                    className="hidden"
-                />
-            </div>
-            <textarea
-                className="w-full h-[calc(100%-8rem)] bg-dark-900 text-gray-300 p-4 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all duration-300"
+                            <textarea
+                className="w-full h-[calc(100%-10rem)] bg-dark-900 text-gray-300 p-4 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all duration-300"
                 placeholder="Start typing your notes here..."
                 value={value}
                 onChange={(e) => onChange(e.target.value)}
+                style={{ fontSize: `${1 * zoom}rem` }}
             />
+            <div className="flex items-center justify-center mt-2">
+                <button
+                    onClick={handleZoomOut}
+                    className="px-3 py-1 bg-gray-700 text-white rounded-lg hover:bg-gray-600 transition-colors duration-200 mr-2"
+                    aria-label="Zoom out"
+                >
+                    -
+                </button>
+                <span className="text-gray-300">{Math.round(zoom * 100)}%</span>
+                <button
+                    onClick={handleZoomIn}
+                    className="px-3 py-1 bg-gray-700 text-white rounded-lg hover:bg-gray-600 transition-colors duration-200 ml-2"
+                    aria-label="Zoom in"
+                >
+                    +
+                </button>
+            </div>
             {/* Attachments display area will go here */}
         </motion.div>
     );

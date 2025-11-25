@@ -8,3 +8,4 @@ pypdf
 flask-sqlalchemy
 flask-bcrypt
 flask-jwt-extended
+Flask-Migrate
