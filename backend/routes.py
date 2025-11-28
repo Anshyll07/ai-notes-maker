@@ -1,11 +1,13 @@
 from flask import Blueprint, request, jsonify, send_from_directory
-from services import chat_with_ai, extract_text_from_pdf
+from services import decide_file_needs, generate_ai_response, extract_text_from_pdf, generate_attachment_summary
 from models import db, User, Note, ChatMessage, Folder, Attachment
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
 from flask_bcrypt import Bcrypt
 import io
 import uuid
 import os
+import json
+import threading
 from werkzeug.utils import secure_filename
 
 api_bp = Blueprint('api', __name__)
@@ -73,7 +75,9 @@ def get_notes():
                 'id': attachment.id,
                 'filename': attachment.filename,
                 'filetype': attachment.filetype,
-                'url': f'/api/attachments/{attachment.filepath}'
+                'url': f'/api/attachments/{attachment.filepath}',
+                'summary': attachment.summary,
+                'summaryStatus': attachment.summary_status
             })
         
         notes_data.append({
@@ -155,13 +159,11 @@ def cleanup_attachment_files(attachment):
         filepath = os.path.join(UPLOAD_FOLDER, attachment.filepath)
         if os.path.exists(filepath):
             os.remove(filepath)
-            print(f"DEBUG: Deleted file {filepath}")
         
         # Remove summary file if exists
         summary_path = filepath + '.json'
         if os.path.exists(summary_path):
             os.remove(summary_path)
-            print(f"DEBUG: Deleted summary {summary_path}")
             
     except Exception as e:
         print(f"Error deleting file {attachment.filepath}: {e}")
@@ -208,33 +210,68 @@ def upload_attachment(note_id):
         file_extension = unique_filename.rsplit('.', 1)[1].lower()
         filetype = 'image' if file_extension in {'png', 'jpg', 'jpeg', 'gif'} else 'pdf'
 
+        # Create attachment with pending status
         new_attachment = Attachment(
             note_id=note_id,
             filename=original_filename,
-            filepath=unique_filename, # Store just the unique filename for URL construction
-            filetype=filetype
+            filepath=unique_filename,
+            filetype=filetype,
+            summary_status='pending'
         )
         db.session.add(new_attachment)
         db.session.commit()
         
-        # Generate summary for PDF
-        if filetype == 'pdf':
-            try:
-                from services import summarize_pdf
-                summary = summarize_pdf(filepath)
-                
-                # Save summary to sidecar JSON file
-                summary_path = filepath + '.json'
-                with open(summary_path, 'w') as f:
-                    json.dump({'summary': summary}, f)
-            except Exception as e:
-                print(f"Error generating summary: {e}")
+        attachment_id = new_attachment.id
+        
+        # Start background summary generation
+        def generate_summary_background():
+            from flask import copy_current_request_context
+            @copy_current_request_context
+            def run_in_thread():
+                from flask import current_app
+                with current_app.app_context():
+                    try:
+                        # Update status to processing
+                        attachment = Attachment.query.get(attachment_id)
+                        if attachment:
+                            attachment.summary_status = 'processing'
+                            db.session.commit()
+                        
+                        # Generate summary (includes cooldown)
+                        summary = generate_attachment_summary(filepath, filetype)
+                        
+                        # Update database with summary
+                        attachment = Attachment.query.get(attachment_id)
+                        if attachment:
+                            attachment.summary = summary
+                            attachment.summary_status = 'complete'
+                            db.session.commit()
+                    except Exception as e:
+                        print(f"ERROR: Summary generation failed: {e}")
+                        import traceback
+                        traceback.print_exc()
+                        try:
+                            attachment = Attachment.query.get(attachment_id)
+                            if attachment:
+                                attachment.summary_status = 'failed'
+                                attachment.summary = f"Failed to generate summary: {str(e)[:100]}"
+                                db.session.commit()
+                        except:
+                            pass
+            
+            thread = threading.Thread(target=run_in_thread)
+            thread.daemon = True
+            thread.start()
+        
+        generate_summary_background()
 
         return jsonify({
             'id': new_attachment.id,
             'filename': new_attachment.filename,
             'filetype': new_attachment.filetype,
-            'url': f'/api/attachments/{new_attachment.filepath}' # URL to serve the file
+            'url': f'/api/attachments/{new_attachment.filepath}',
+            'summary': new_attachment.summary,
+            'summaryStatus': new_attachment.summary_status
         }), 201
     else:
         return jsonify({'error': 'Allowed file types are png, jpg, jpeg, gif, pdf'}), 400
@@ -242,6 +279,138 @@ def upload_attachment(note_id):
 @api_bp.route('/attachments/<filename>', methods=['GET'])
 def serve_attachment(filename):
     return send_from_directory(UPLOAD_FOLDER, filename)
+
+
+
+@api_bp.route('/attachments/status/<int:attachment_id>', methods=['GET'])
+@jwt_required()
+def get_attachment_status(attachment_id):
+    """Get attachment status for polling summary generation progress."""
+    current_user_id = int(get_jwt_identity())
+    
+    attachment = Attachment.query.get(attachment_id)
+    if not attachment:
+        return jsonify({'error': 'Attachment not found'}), 404
+    
+    # Verify user owns this attachment's note
+    note = Note.query.get(attachment.note_id)
+    if not note or note.user_id != current_user_id:
+        return jsonify({'error': 'Unauthorized'}), 403
+    
+    return jsonify({
+        'id': attachment.id,
+        'filename': attachment.filename,
+        'filetype': attachment.filetype,
+        'url': f'/api/attachments/{attachment.filepath}',
+        'summary': attachment.summary,
+        'summaryStatus': attachment.summary_status
+    }), 200
+
+@api_bp.route('/attachments/<int:attachment_id>/regenerate-summary', methods=['POST'])
+@jwt_required()
+def regenerate_summary(attachment_id):
+    """Regenerate summary for an attachment."""
+    current_user_id = int(get_jwt_identity())
+    
+    attachment = Attachment.query.get(attachment_id)
+    if not attachment:
+        return jsonify({'error': 'Attachment not found'}), 404
+    
+    # Verify user owns this attachment's note
+    note = Note.query.get(attachment.note_id)
+    if not note or note.user_id != current_user_id:
+        return jsonify({'error': 'Unauthorized'}), 403
+    
+    # Reset summary status to pending
+    attachment.summary_status = 'pending'
+    attachment.summary = None
+    db.session.commit()
+    
+    # Get file path
+    filepath = os.path.join(UPLOAD_FOLDER, attachment.filepath)
+    if not os.path.exists(filepath):
+        attachment.summary_status = 'failed'
+        attachment.summary = 'File not found'
+        db.session.commit()
+        return jsonify({'error': 'File not found'}), 404
+    
+    # Start background summary generation
+    def generate_summary_background():
+        from flask import copy_current_request_context
+        @copy_current_request_context
+        def run_in_thread():
+            from flask import current_app
+            with current_app.app_context():
+                try:
+                    # Update status to processing
+                    att = Attachment.query.get(attachment_id)
+                    if att and att.summary_status == 'pending':
+                        att.summary_status = 'processing'
+                        db.session.commit()
+                    
+                    # Generate summary (includes cooldown)
+                    summary = generate_attachment_summary(filepath, attachment.filetype)
+                    
+                    # Update database with summary
+                    att = Attachment.query.get(attachment_id)
+                    if att and att.summary_status == 'processing':
+                        att.summary = summary
+                        att.summary_status = 'complete'
+                        db.session.commit()
+                except Exception as e:
+                    print(f"ERROR: Summary regeneration failed: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    try:
+                        att = Attachment.query.get(attachment_id)
+                        if att:
+                            att.summary_status = 'failed'
+                            att.summary = f"Failed to generate summary: {str(e)[:100]}"
+                            db.session.commit()
+                    except:
+                        pass
+        
+        thread = threading.Thread(target=run_in_thread)
+        thread.daemon = True
+        thread.start()
+    
+    generate_summary_background()
+    
+    return jsonify({
+        'id': attachment.id,
+        'filename': attachment.filename,
+        'summaryStatus': 'pending',
+        'message': 'Summary regeneration started'
+    }), 200
+
+@api_bp.route('/attachments/<int:attachment_id>/cancel-summary', methods=['POST'])
+@jwt_required()
+def cancel_summary(attachment_id):
+    """Cancel summary generation for an attachment."""
+    current_user_id = int(get_jwt_identity())
+    
+    attachment = Attachment.query.get(attachment_id)
+    if not attachment:
+        return jsonify({'error': 'Attachment not found'}), 404
+    
+    # Verify user owns this attachment's note
+    note = Note.query.get(attachment.note_id)
+    if not note or note.user_id != current_user_id:
+        return jsonify({'error': 'Unauthorized'}), 403
+    
+    # Set status to cancelled (the background thread will check this)
+    if attachment.summary_status in ['pending', 'processing']:
+        attachment.summary_status = 'cancelled'
+        attachment.summary = 'Summary generation cancelled by user'
+        db.session.commit()
+    
+    return jsonify({
+        'id': attachment.id,
+        'filename': attachment.filename,
+        'summaryStatus': attachment.summary_status,
+        'message': 'Summary generation cancelled'
+    }), 200
+
 
 @api_bp.route('/attachments/<int:attachment_id>', methods=['DELETE'])
 @jwt_required()
@@ -426,22 +595,18 @@ def upload_file():
     else:
         return jsonify({'error': 'Invalid file type. Only PDF and images (JPG, PNG, GIF, WEBP, BMP) allowed.'}), 400
 
-@api_bp.route('/chat', methods=['POST'])
+@api_bp.route('/chat/decide', methods=['POST'])
 @jwt_required()
-def chat():
-    current_user_id = int(get_jwt_identity())
-    data = request.json
+def chat_decide():
+    data = request.get_json()
     note_id = data.get('note_id')
     user_message = data.get('message')
-    current_content = data.get('content')
-    mode = data.get('mode', 'always')
-    pdf_context_filename = data.get('pdf_context')
+    selected_text = data.get('selected_text')
 
     if not note_id or not user_message:
-        return jsonify({'error': 'Note ID and message required'}), 400
+        return jsonify({'error': 'Missing note_id or message'}), 400
 
-    # Verify note ownership
-    note = Note.query.filter_by(id=note_id, user_id=current_user_id).first()
+    note = Note.query.get(note_id)
     if not note:
         return jsonify({'error': 'Note not found'}), 404
 
@@ -450,45 +615,88 @@ def chat():
     db.session.add(user_chat_message)
     db.session.commit()
 
-    # Handle PDF Context
-    pdf_context_path = None
-    if pdf_context_filename:
-        # Find the attachment
-        attachment = Attachment.query.filter_by(note_id=note_id, filename=pdf_context_filename).first()
+    # Get attachment summaries
+    attachments = Attachment.query.filter_by(note_id=note_id).all()
+    attachment_summaries = []
+    for att in attachments:
+        file_path = os.path.join(UPLOAD_FOLDER, att.filepath)
+        attachment_summaries.append({
+            'id': att.id,
+            'filename': att.filename,
+            'filepath': file_path if os.path.exists(file_path) else None,
+            'filetype': att.filetype,
+            'summary': att.summary,
+            'summary_status': att.summary_status
+        })
 
-        if attachment and attachment.filetype == 'pdf':
-            file_path = os.path.join(UPLOAD_FOLDER, attachment.filepath)
-            if os.path.exists(file_path):
-                pdf_context_path = file_path
-    
-    # Get PDF context if provided (for legacy/direct support)
-    # This overrides the attachment-based pdf_context_path if pdf_filename is provided via args
-    pdf_filename = request.args.get('pdf_filename')
-    
-    if pdf_filename:
-        # Security check: ensure filename is in uploads
-        # We assume pdf_filename is just the basename
-        pdf_context_path = os.path.join(UPLOAD_FOLDER, secure_filename(pdf_filename))
-        if not os.path.exists(pdf_context_path):
-            pdf_context_path = None
+    try:
+        from services import decide_file_needs
+        decision = decide_file_needs(user_message, note.content, attachment_summaries, selected_text)
+        return jsonify(decision), 200
+    except Exception as e:
+        print(f"AI Decision Error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@api_bp.route('/chat/respond', methods=['POST'])
+@jwt_required()
+def chat_respond():
+    data = request.get_json()
+    note_id = data.get('note_id')
+    user_message = data.get('message')
+    selected_text = data.get('selected_text')
+    mode = data.get('mode', 'think')
+    file_numbers = data.get('file_numbers', []) # List of indices (1-based)
+
+    if not note_id or not user_message:
+        return jsonify({'error': 'Missing note_id or message'}), 400
+
+    note = Note.query.get(note_id)
+    if not note:
+        return jsonify({'error': 'Note not found'}), 404
 
     # Get chat history
     history = ChatMessage.query.filter_by(note_id=note_id).order_by(ChatMessage.timestamp.asc()).all()
     chat_history = [{'sender': msg.sender, 'text': msg.text} for msg in history]
 
-    # Get selected text
-    selected_text = data.get('selected_text')
+    # Load requested files
+    attachments = Attachment.query.filter_by(note_id=note_id).all()
+    full_file_contents = []
+    analyzed_files = []
 
-    # Call AI Service
     try:
-        response_data = chat_with_ai(
+        from google.genai import types
+        import mimetypes
+
+        for num in file_numbers:
+            if 0 < num <= len(attachments):
+                att = attachments[num - 1]
+                file_path = os.path.join(UPLOAD_FOLDER, att.filepath)
+                
+                if os.path.exists(file_path):
+                    analyzed_files.append(att.filename)
+                    with open(file_path, 'rb') as f:
+                        file_data = f.read()
+                    
+                    if att.filetype == 'pdf':
+                        full_file_contents.append(types.Part.from_bytes(
+                            data=file_data,
+                            mime_type='application/pdf'
+                        ))
+                    elif att.filetype == 'image':
+                        mime_type, _ = mimetypes.guess_type(file_path)
+                        full_file_contents.append(types.Part.from_bytes(
+                            data=file_data,
+                            mime_type=mime_type or 'image/jpeg'
+                        ))
+
+        from services import generate_ai_response
+        response_data = generate_ai_response(
             user_message, 
-            current_content, 
-            mode,
-            chat_history=chat_history[:-1], # Exclude the current message as it's passed as 'message'
-            pdf_context_path=pdf_context_path,
-            selected_text=selected_text,
-            pdf_filename=pdf_filename # Pass the potentially new pdf_filename
+            note.content, 
+            mode, 
+            chat_history, 
+            full_file_contents=full_file_contents,
+            selected_text=selected_text
         )
         
         response_text = response_data.get('response_text')
@@ -498,17 +706,19 @@ def chat():
         # Save assistant response
         ai_chat_message = ChatMessage(note_id=note_id, sender='assistant', text=response_text)
         db.session.add(ai_chat_message)
-        
         db.session.commit()
 
         return jsonify({
             'response_text': response_text,
             'updated_html': updated_html,
-            'requires_confirmation': requires_confirmation
+            'requires_confirmation': requires_confirmation,
+            'analyzed_files': analyzed_files
         }), 200
 
     except Exception as e:
-        print(f"AI Error: {e}")
+        print(f"AI Response Error: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 @api_bp.route('/transcribe_audio', methods=['POST'])

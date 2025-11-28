@@ -15,8 +15,6 @@ import { TableHeader } from '@tiptap/extension-table-header';
 import { TableCell } from '@tiptap/extension-table-cell';
 import 'katex/dist/katex.min.css';
 import ShapeOverlay from './ShapeOverlay';
-import jsPDF from 'jspdf';
-import html2canvas from 'html2canvas';
 
 interface Shape {
   id: string;
@@ -34,6 +32,8 @@ interface Attachment {
   filename: string;
   filetype: string;
   url: string;
+  summary?: string;
+  summaryStatus?: 'pending' | 'processing' | 'complete' | 'failed' | 'cancelled';
 }
 
 interface RichTextEditorProps {
@@ -47,14 +47,17 @@ interface RichTextEditorProps {
   onFileUpload: (file: File, noteId: string) => void;
   onAttachmentClick: (attachment: Attachment) => void;
   onDeleteAttachment: (noteId: string, attachmentId: number) => void;
+  onRegenerateSummary: (attachmentId: number, noteId: string) => void;
+  onCancelSummary: (attachmentId: number, noteId: string) => void;
 }
 
-const RichTextEditor: React.FC<RichTextEditorProps> = ({ noteId, content, onChange, onTextSelect, editorRef, onTableActiveChange, attachments, onFileUpload, onAttachmentClick, onDeleteAttachment }) => {
+const RichTextEditor: React.FC<RichTextEditorProps> = ({ noteId, content, onChange, onTextSelect, editorRef, onTableActiveChange, attachments, onFileUpload, onAttachmentClick, onDeleteAttachment, onRegenerateSummary, onCancelSummary }) => {
   const [highlightColor, setHighlightColor] = useState('#ffc078');
   const [selectedFont, setSelectedFont] = useState('Inter');
   const [shapes, setShapes] = useState<Shape[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [deleteAttachmentConfirmation, setDeleteAttachmentConfirmation] = useState<Attachment | null>(null);
+  const [showSummaryModal, setShowSummaryModal] = useState(false);
 
   const editor = useEditor({
     extensions: [
@@ -214,206 +217,16 @@ const RichTextEditor: React.FC<RichTextEditorProps> = ({ noteId, content, onChan
     setDeleteAttachmentConfirmation(null);
   };
 
-  const handleExportPDF = async () => {
-    if (!editor) return;
+  const truncateFilename = (filename: string, maxLength: number = 25) => {
+    if (filename.length <= maxLength) return filename;
 
-    // Create a container for the content
-    const element = document.createElement('div');
-    element.innerHTML = editor.getHTML();
+    const extension = filename.slice(filename.lastIndexOf('.'));
+    const nameWithoutExt = filename.slice(0, filename.lastIndexOf('.'));
+    const truncatedLength = maxLength - extension.length - 3; // 3 for "..."
 
-    // Apply comprehensive PDF-friendly styling
-    element.style.padding = '40px';
-    element.style.fontFamily = 'Arial, Helvetica, sans-serif';
-    element.style.color = '#000000';
-    element.style.backgroundColor = '#ffffff';
-    element.style.width = '210mm';
-    element.style.minHeight = '297mm';
-    element.style.lineHeight = '1.6';
-    element.style.fontSize = '14px';
+    if (truncatedLength <= 0) return filename;
 
-    // Style all child elements for PDF
-    const allElements = element.querySelectorAll('*');
-    allElements.forEach((el: any) => {
-      // Remove dark backgrounds
-      if (el.style.backgroundColor && el.style.backgroundColor !== 'transparent') {
-        const bgColor = el.style.backgroundColor;
-        // Only keep highlight colors, remove dark backgrounds
-        if (!bgColor.includes('rgb(255') && !bgColor.includes('#ff') && !bgColor.includes('#f')) {
-          el.style.backgroundColor = 'transparent';
-        }
-      }
-
-      // Ensure text is black unless it's a specific color
-      if (el.style.color) {
-        const color = el.style.color;
-        // Keep intentional colors, but convert white/light text to black
-        if (color.includes('rgb(255, 255, 255)') || color.includes('#fff') || color.includes('white')) {
-          el.style.color = '#000000';
-        }
-      }
-
-      // Fix highlights - make them subtle and readable
-      if (el.tagName === 'MARK') {
-        el.style.backgroundColor = '#fff9c4'; // Light yellow
-        el.style.color = '#000000';
-        el.style.padding = '2px 0';
-      }
-
-      // Style code blocks
-      if (el.tagName === 'PRE' || el.tagName === 'CODE') {
-        el.style.backgroundColor = '#f5f5f5';
-        el.style.border = '1px solid #ddd';
-        el.style.padding = '12px';
-        el.style.borderRadius = '4px';
-        el.style.fontFamily = 'Courier New, monospace';
-        el.style.fontSize = '12px';
-        el.style.color = '#000000';
-        el.style.whiteSpace = 'pre-wrap';
-        el.style.wordBreak = 'break-word';
-      }
-
-      // Style math/KaTeX elements - ensure they are visible and black
-      if (el.classList.contains('math-display') || el.classList.contains('math-inline') ||
-        el.classList.contains('katex') || el.classList.contains('katex-display')) {
-        el.style.color = '#000000';
-        el.style.backgroundColor = 'transparent';
-      }
-
-      // Make sure SVG elements in math are visible
-      if (el.tagName === 'SVG') {
-        el.style.color = '#000000';
-      }
-
-      // Style headings
-      if (el.tagName === 'H1') {
-        el.style.fontSize = '24px';
-        el.style.fontWeight = 'bold';
-        el.style.marginTop = '20px';
-        el.style.marginBottom = '12px';
-        el.style.color = '#000000';
-      }
-      if (el.tagName === 'H2') {
-        el.style.fontSize = '20px';
-        el.style.fontWeight = 'bold';
-        el.style.marginTop = '16px';
-        el.style.marginBottom = '10px';
-        el.style.color = '#000000';
-      }
-      if (el.tagName === 'H3') {
-        el.style.fontSize = '16px';
-        el.style.fontWeight = 'bold';
-        el.style.marginTop = '14px';
-        el.style.marginBottom = '8px';
-        el.style.color = '#000000';
-      }
-
-      // Style paragraphs
-      if (el.tagName === 'P') {
-        el.style.marginBottom = '12px';
-        el.style.color = '#000000';
-      }
-
-      // Style tables
-      if (el.tagName === 'TABLE') {
-        el.style.borderCollapse = 'collapse';
-        el.style.width = '100%';
-        el.style.marginBottom = '16px';
-      }
-      if (el.tagName === 'TD' || el.tagName === 'TH') {
-        el.style.border = '1px solid #ddd';
-        el.style.padding = '8px';
-        el.style.color = '#000000';
-      }
-      if (el.tagName === 'TH') {
-        el.style.backgroundColor = '#f5f5f5';
-        el.style.fontWeight = 'bold';
-      }
-
-      // Style lists
-      if (el.tagName === 'UL' || el.tagName === 'OL') {
-        el.style.marginLeft = '20px';
-        el.style.marginBottom = '12px';
-      }
-      if (el.tagName === 'LI') {
-        el.style.marginBottom = '4px';
-        el.style.color = '#000000';
-      }
-    });
-
-    // Position element visibly but off-scroll for proper KaTeX rendering
-    element.style.position = 'fixed';
-    element.style.top = '0';
-    element.style.left = '0';
-    element.style.zIndex = '9999';
-    element.style.overflow = 'auto';
-    element.style.maxHeight = '100vh';
-
-    // Add semi-transparent overlay to show export is in progress
-    const overlay = document.createElement('div');
-    overlay.style.position = 'fixed';
-    overlay.style.top = '0';
-    overlay.style.left = '0';
-    overlay.style.right = '0';
-    overlay.style.bottom = '0';
-    overlay.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
-    overlay.style.zIndex = '9998';
-    overlay.style.display = 'flex';
-    overlay.style.alignItems = 'center';
-    overlay.style.justifyContent = 'center';
-    overlay.style.color = 'white';
-    overlay.style.fontSize = '20px';
-    overlay.innerHTML = '<div>Generating PDF... Please wait</div>';
-
-    document.body.appendChild(overlay);
-    document.body.appendChild(element);
-
-    try {
-      // Wait for KaTeX to fully render
-      await new Promise(resolve => setTimeout(resolve, 1000));
-
-      // Convert HTML to canvas
-      const canvas = await html2canvas(element, {
-        scale: 2,
-        useCORS: true,
-        logging: false,
-        backgroundColor: '#ffffff',
-      });
-
-      // Create PDF
-      const imgData = canvas.toDataURL('image/png');
-      const pdf = new jsPDF({
-        orientation: 'portrait',
-        unit: 'mm',
-        format: 'a4',
-      });
-
-      const imgWidth = 210; // A4 width in mm
-      const pageHeight = 297; // A4 height in mm
-      const imgHeight = (canvas.height * imgWidth) / canvas.width;
-      let heightLeft = imgHeight;
-      let position = 0;
-
-      // Add first page
-      pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
-      heightLeft -= pageHeight;
-
-      // Add additional pages if content is longer than one page
-      while (heightLeft > 0) {
-        position = heightLeft - imgHeight;
-        pdf.addPage();
-        pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
-        heightLeft -= pageHeight;
-      }
-
-      pdf.save('my-note.pdf');
-    } catch (error) {
-      console.error('PDF Export Error:', error);
-      alert('Failed to export PDF. Please check the console for details.');
-    } finally {
-      // Remove temporary elements
-      document.body.removeChild(element);
-      document.body.removeChild(overlay);
-    }
+    return `${nameWithoutExt.slice(0, truncatedLength)}...${extension}`;
   };
 
   return (
@@ -534,25 +347,7 @@ const RichTextEditor: React.FC<RichTextEditorProps> = ({ noteId, content, onChan
 
         <div className="w-px h-6 bg-dark-600/50"></div>
 
-        {/* Shapes */}
-        <div className="flex items-center gap-0.5">
-          <button
-            onClick={() => addShape('box')}
-            className="w-9 h-9 flex items-center justify-center rounded-md transition-all duration-150 text-gray-400 hover:bg-dark-700/80 hover:text-white"
-            title="Add Box"
-          >
-            <span className="material-symbols-outlined text-base">rectangle</span>
-          </button>
-          <button
-            onClick={() => addShape('circle')}
-            className="w-9 h-9 flex items-center justify-center rounded-md transition-all duration-150 text-gray-400 hover:bg-dark-700/80 hover:text-white"
-            title="Add Circle"
-          >
-            <span className="material-symbols-outlined text-base">circle</span>
-          </button>
-        </div>
 
-        <div className="w-px h-6 bg-dark-600/50"></div>
 
         {/* File Attach */}
         <div className="flex items-center gap-0.5">
@@ -612,14 +407,18 @@ const RichTextEditor: React.FC<RichTextEditorProps> = ({ noteId, content, onChan
 
         <div className="w-px h-6 bg-dark-600/50"></div>
 
-        {/* Export PDF */}
+        {/* Show Summary */}
         <div className="flex items-center gap-0.5">
           <button
-            onClick={handleExportPDF}
-            className="w-9 h-9 flex items-center justify-center rounded-md transition-all duration-150 text-gray-400 hover:bg-dark-700/80 hover:text-white"
-            title="Export to PDF"
+            onClick={() => setShowSummaryModal(true)}
+            disabled={attachments.length === 0}
+            className={`w-9 h-9 flex items-center justify-center rounded-md transition-all duration-150 ${attachments.length === 0
+              ? 'text-gray-600 cursor-not-allowed'
+              : 'text-gray-400 hover:bg-dark-700/80 hover:text-white'
+              }`}
+            title="View Attachment Summaries"
           >
-            <span className="material-symbols-outlined text-base">picture_as_pdf</span>
+            <span className="material-symbols-outlined text-base">summarize</span>
           </button>
         </div>
       </div>
@@ -641,7 +440,21 @@ const RichTextEditor: React.FC<RichTextEditorProps> = ({ noteId, content, onChan
                     <span className="material-symbols-outlined text-base">
                       {attachment.filetype === 'pdf' ? 'picture_as_pdf' : 'image'}
                     </span>
-                    <span>{attachment.filename}</span>
+                    <span title={attachment.filename}>{truncateFilename(attachment.filename)}</span>
+                    {/* Summary status indicator */}
+                    {attachment.summaryStatus === 'processing' || attachment.summaryStatus === 'pending' ? (
+                      <span className="material-symbols-outlined text-sm text-blue-400 animate-spin" title="Generating summary...">
+                        progress_activity
+                      </span>
+                    ) : attachment.summaryStatus === 'complete' ? (
+                      <span className="material-symbols-outlined text-sm text-green-400" title="Summary ready">
+                        check_circle
+                      </span>
+                    ) : attachment.summaryStatus === 'failed' ? (
+                      <span className="material-symbols-outlined text-sm text-red-400" title="Summary failed">
+                        error
+                      </span>
+                    ) : null}
                   </button>
                   <button
                     onClick={() => setDeleteAttachmentConfirmation(attachment)}
@@ -701,6 +514,126 @@ const RichTextEditor: React.FC<RichTextEditorProps> = ({ noteId, content, onChan
                     Delete
                   </button>
                 </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Summary Modal */}
+      <AnimatePresence>
+        {showSummaryModal && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4" onClick={() => setShowSummaryModal(false)}>
+            <div className="fixed inset-0 bg-black/60" />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="relative bg-dark-800 border border-dark-700 rounded-lg shadow-2xl p-6 w-full max-w-2xl max-h-[80vh] overflow-hidden flex flex-col"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-xl font-semibold text-white flex items-center gap-2">
+                  <span className="material-symbols-outlined">summarize</span>
+                  Attachment Summaries
+                </h3>
+                <button
+                  onClick={() => setShowSummaryModal(false)}
+                  className="text-gray-400 hover:text-white transition-colors"
+                >
+                  <X size={24} />
+                </button>
+              </div>
+
+              <div className="overflow-y-auto flex-1 space-y-4 pr-2">
+                {attachments.length === 0 ? (
+                  <div className="text-center py-8 text-gray-400">
+                    <span className="material-symbols-outlined text-5xl mb-2 opacity-50">attach_file</span>
+                    <p>No attachments found</p>
+                  </div>
+                ) : (
+                  attachments.map((attachment) => (
+                    <div key={attachment.id} className="bg-dark-700/50 rounded-lg p-4 border border-dark-600">
+                      <div className="flex items-start gap-3">
+                        <span className="material-symbols-outlined text-2xl text-blue-400">
+                          {attachment.filetype === 'pdf' ? 'picture_as_pdf' : 'image'}
+                        </span>
+                        <div className="flex-1">
+                          <div className="flex items-center justify-between gap-2 mb-2">
+                            <div className="flex items-center gap-2">
+                              <h4 className="font-medium text-white" title={attachment.filename}>
+                                {truncateFilename(attachment.filename, 35)}
+                              </h4>
+                              {attachment.summaryStatus === 'processing' || attachment.summaryStatus === 'pending' ? (
+                                <span className="flex items-center gap-1 text-xs text-blue-400">
+                                  <span className="material-symbols-outlined text-sm animate-spin">progress_activity</span>
+                                  Generating...
+                                </span>
+                              ) : attachment.summaryStatus === 'complete' ? (
+                                <span className="flex items-center gap-1 text-xs text-green-400">
+                                  <span className="material-symbols-outlined text-sm">check_circle</span>
+                                  Complete
+                                </span>
+                              ) : attachment.summaryStatus === 'failed' ? (
+                                <span className="flex items-center gap-1 text-xs text-red-400">
+                                  <span className="material-symbols-outlined text-sm">error</span>
+                                  Failed
+                                </span>
+                              ) : attachment.summaryStatus === 'cancelled' ? (
+                                <span className="flex items-center gap-1 text-xs text-gray-400">
+                                  <span className="material-symbols-outlined text-sm">cancel</span>
+                                  Cancelled
+                                </span>
+                              ) : null}
+                            </div>
+
+                            {/* Action buttons */}
+                            <div className="flex items-center gap-1">
+                              {(attachment.summaryStatus === 'processing' || attachment.summaryStatus === 'pending') && noteId && (
+                                <button
+                                  onClick={() => onCancelSummary(attachment.id, noteId)}
+                                  className="px-2 py-1 text-xs bg-red-600/20 hover:bg-red-600/30 text-red-400 rounded transition-colors flex items-center gap-1"
+                                  title="Cancel summary generation"
+                                >
+                                  <span className="material-symbols-outlined text-sm">stop</span>
+                                  Cancel
+                                </button>
+                              )}
+                              {(attachment.summaryStatus === 'failed' || attachment.summaryStatus === 'cancelled' || attachment.summaryStatus === 'complete') && noteId && (
+                                <button
+                                  onClick={() => onRegenerateSummary(attachment.id, noteId)}
+                                  className="px-2 py-1 text-xs bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 rounded transition-colors flex items-center gap-1"
+                                  title="Regenerate summary"
+                                >
+                                  <span className="material-symbols-outlined text-sm">refresh</span>
+                                  Regenerate
+                                </button>
+                              )}
+                            </div>
+                          </div>
+
+                          {attachment.summary ? (
+                            <p className="text-sm text-gray-300 leading-relaxed">
+                              {attachment.summary}
+                            </p>
+                          ) : attachment.summaryStatus === 'failed' ? (
+                            <p className="text-sm text-red-400/70 italic">
+                              Failed to generate summary
+                            </p>
+                          ) : attachment.summaryStatus === 'cancelled' ? (
+                            <p className="text-sm text-gray-400/70 italic">
+                              Summary generation was cancelled
+                            </p>
+                          ) : (
+                            <p className="text-sm text-gray-500 italic">
+                              Summary is being generated...
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
               </div>
             </motion.div>
           </div>

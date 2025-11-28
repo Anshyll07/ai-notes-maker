@@ -20,12 +20,27 @@ interface ChatPanelProps {
   onSendMessage: (message: string, pdfContext?: string) => void;
   onClearChat: () => void;
   isLoading: boolean;
+  loadingMessage?: string;
   mode: ConfirmationMode;
   onModeChange: (mode: ConfirmationMode) => void;
   attachments: Attachment[];
+  isAutoFileAccessEnabled: boolean;
+  onToggleAutoFileAccess: () => void;
 }
 
-const ChatPanel: React.FC<ChatPanelProps> = ({ messages, onSendMessage, onClearChat, isLoading, mode, onModeChange, attachments = [] }) => {
+const ChatPanel: React.FC<ChatPanelProps> = ({
+  messages,
+  onSendMessage,
+  onClearChat,
+  isLoading,
+  loadingMessage = 'Thinking...',
+  mode,
+  onModeChange,
+  attachments = [],
+  isAutoFileAccessEnabled,
+  onToggleAutoFileAccess
+}) => {
+  const [loadingStatus, setLoadingStatus] = useState('Thinking...');
   const [input, setInput] = useState('');
   const [showMentionPopup, setShowMentionPopup] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
@@ -39,7 +54,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ messages, onSendMessage, onClearC
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages, isLoading]);
+  }, [messages, isLoading, loadingMessage]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const newValue = e.target.value;
@@ -89,24 +104,32 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ messages, onSendMessage, onClearC
     }
   };
 
+  const filteredAttachments = attachments.filter(att =>
+    att.filename.toLowerCase().includes(mentionQuery.toLowerCase())
+  );
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (input.trim() && !isLoading) {
-      // Check if the message contains an attachment mention that matches one of our attachments
-      // This is a simple check. For more robust handling, we might want to store the selected attachment ID.
-      // For now, we'll extract the filename from the text if it matches @filename
       let pdfContext = undefined;
 
       // Find mentioned attachments
       const mentionedAttachment = attachments.find(att => input.includes(`@${att.filename}`));
-      if (mentionedAttachment && mentionedAttachment.filetype === 'pdf') {
+      if (mentionedAttachment) {
         pdfContext = mentionedAttachment.filename;
+        setLoadingStatus(`Analyzing ${mentionedAttachment.filename}...`);
       } else {
-        // If no explicit mention, check if there are PDF attachments
-        // Automatically use the most recent PDF (last in the list)
-        const pdfAttachments = attachments.filter(att => att.filetype === 'pdf');
-        if (pdfAttachments.length > 0) {
-          pdfContext = pdfAttachments[pdfAttachments.length - 1].filename;
+        // If no explicit mention, check if there are attachments
+        // Automatically use the most recent attachment (last in the list)
+        if (attachments.length > 0 && isAutoFileAccessEnabled) {
+          // Only auto-select if enabled
+          // But wait, the parent handles the auto-decision logic now.
+          // So here we just pass undefined if no explicit mention.
+          // The parent will decide whether to call /decide or not.
+          // But for the loading status, we should be careful.
+          setLoadingStatus('Checking attachments...');
+        } else {
+          setLoadingStatus('Thinking...');
         }
       }
 
@@ -121,10 +144,6 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ messages, onSendMessage, onClearC
     }
   };
 
-  const filteredAttachments = attachments.filter(att =>
-    att.filename.toLowerCase().includes(mentionQuery.toLowerCase())
-  );
-
   return (
     <div className="flex flex-col h-full bg-dark-800 border-l border-dark-700 overflow-y-hidden">
       <div className="p-4 border-b border-dark-700 bg-dark-900/50 backdrop-blur-sm flex justify-between items-center">
@@ -132,13 +151,28 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ messages, onSendMessage, onClearC
           <span className="material-icons text-blue-400 text-sm">smart_toy</span>
           Lumina Copilot
         </h2>
-        <button
-          onClick={onClearChat}
-          className="p-1.5 text-gray-400 hover:text-red-400 hover:bg-dark-700 rounded-lg transition-colors"
-          title="Delete Chat"
-        >
-          <span className="material-icons text-sm">delete_outline</span>
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={onToggleAutoFileAccess}
+            className={`flex items-center gap-1 px-2 py-1 rounded text-xs font-medium transition-colors ${isAutoFileAccessEnabled
+              ? 'bg-blue-600/20 text-blue-400 hover:bg-blue-600/30'
+              : 'bg-gray-700/50 text-gray-400 hover:bg-gray-700'
+              }`}
+            title={isAutoFileAccessEnabled ? "Auto-analyze files enabled" : "Auto-analyze files disabled"}
+          >
+            <span className="material-icons text-[14px]">
+              {isAutoFileAccessEnabled ? 'auto_awesome' : 'do_not_disturb_on'}
+            </span>
+            {isAutoFileAccessEnabled ? 'Auto' : 'Manual'}
+          </button>
+          <button
+            onClick={onClearChat}
+            className="p-1.5 text-gray-400 hover:text-red-400 hover:bg-dark-700 rounded-lg transition-colors"
+            title="Delete Chat"
+          >
+            <span className="material-icons text-sm">delete_outline</span>
+          </button>
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 pr-2">
@@ -146,8 +180,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ messages, onSendMessage, onClearC
           {messages.map((msg, index) => (
             <div
               key={index}
-              className={`flex flex-col gap-1 ${msg.sender === 'user' ? 'items-end' : 'items-start'
-                }`}
+              className={`flex flex-col gap-1 ${msg.sender === 'user' ? 'items-end' : 'items-start'}`}
             >
               <div
                 className={`max-w-[85%] p-3 rounded-xl ${msg.sender === 'user'
@@ -155,14 +188,25 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ messages, onSendMessage, onClearC
                   : 'bg-dark-700 text-gray-300'
                   }`}
               >
-                <p className="text-sm whitespace-pre-wrap">{msg.text}</p>
+                {msg.sender === 'assistant' ? (
+                  <div
+                    className="text-sm prose prose-invert prose-sm max-w-none ai-message-content 
+                    [&>h1]:text-2xl [&>h1]:font-normal [&>h1]:mb-4 
+                    [&>h2]:text-xl [&>h2]:font-normal [&>h2]:mt-4 [&>h2]:mb-2 
+                    [&>h3]:text-lg [&>h3]:font-normal [&>h3]:mt-3 [&>h3]:mb-1 
+                    [&>ul]:list-disc [&>ul]:pl-4 [&>li]:mb-1"
+                    dangerouslySetInnerHTML={{ __html: msg.text }}
+                  />
+                ) : (
+                  <p className="text-sm whitespace-pre-wrap">{msg.text}</p>
+                )}
               </div>
             </div>
           ))}
           {isLoading && (
             <div className="flex items-start gap-1">
               <div className="max-w-[85%] p-3 rounded-xl bg-dark-700 text-gray-300">
-                <p className="text-sm animate-pulse">Thinking...</p>
+                <p className="text-sm animate-pulse">{loadingMessage}</p>
               </div>
             </div>
           )}

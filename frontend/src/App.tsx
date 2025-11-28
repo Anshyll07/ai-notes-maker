@@ -31,6 +31,8 @@ export interface Attachment {
   filename: string;
   filetype: string;
   url: string;
+  summary?: string;
+  summaryStatus?: 'pending' | 'processing' | 'complete' | 'failed' | 'cancelled';
 }
 
 export interface Note {
@@ -53,6 +55,7 @@ interface AIResponse {
   response_text: string;
   updated_html: string;
   requires_confirmation: boolean;
+  analyzed_files?: string[];
 }
 
 const API_BASE_URL = 'http://127.0.0.1:5000';
@@ -264,6 +267,11 @@ function AuthenticatedApp() {
               : note
           )
         );
+
+        // Start polling for summary if status is pending or processing
+        if (newAttachment.summaryStatus === 'pending' || newAttachment.summaryStatus === 'processing') {
+          pollAttachmentStatus(newAttachment.id, noteId);
+        }
       } else {
         console.error('Failed to upload file:', response.status);
       }
@@ -271,6 +279,113 @@ function AuthenticatedApp() {
       console.error('Error uploading file:', error);
     }
   };
+
+  const pollAttachmentStatus = async (attachmentId: number, noteId: string, attempt: number = 0) => {
+    // Exponential backoff: 1s, 2s, 3s, 4s, 5s, then stop
+    const maxAttempts = 15;
+    const delay = Math.min(1000 + (attempt * 500), 5000);
+
+    if (attempt >= maxAttempts) {
+      console.log('Stopped polling for attachment:', attachmentId);
+      return;
+    }
+
+    setTimeout(async () => {
+      try {
+        const response = await fetch(`${API_URL}/attachments/status/${attachmentId}`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+
+        if (response.ok) {
+          const updatedAttachment: Attachment = await response.json();
+
+          // Update the attachment in state
+          setNotes(prevNotes =>
+            prevNotes.map(note =>
+              note.id === noteId
+                ? {
+                  ...note,
+                  attachments: note.attachments.map(att =>
+                    att.id === attachmentId ? updatedAttachment : att
+                  )
+                }
+                : note
+            )
+          );
+
+          // Continue polling if still processing
+          if (updatedAttachment.summaryStatus === 'pending' || updatedAttachment.summaryStatus === 'processing') {
+            pollAttachmentStatus(attachmentId, noteId, attempt + 1);
+          }
+        }
+      } catch (error) {
+        console.error('Error polling attachment status:', error);
+      }
+    }, delay);
+  };
+
+  const handleRegenerateSummary = async (attachmentId: number, noteId: string) => {
+    if (!token) return;
+    try {
+      const response = await fetch(`${API_URL}/attachments/${attachmentId}/regenerate-summary`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+
+      if (response.ok) {
+        const updatedAttachment = await response.json();
+        // Update state immediately to show pending
+        setNotes(prevNotes =>
+          prevNotes.map(note =>
+            note.id === noteId
+              ? {
+                ...note,
+                attachments: note.attachments.map(att =>
+                  att.id === attachmentId ? { ...att, summaryStatus: 'pending' as const } : att
+                )
+              }
+              : note
+          )
+        );
+        // Start polling
+        pollAttachmentStatus(attachmentId, noteId);
+      }
+    } catch (error) {
+      console.error('Error regenerating summary:', error);
+    }
+  };
+
+  const handleCancelSummary = async (attachmentId: number, noteId: string) => {
+    if (!token) return;
+    try {
+      const response = await fetch(`${API_URL}/attachments/${attachmentId}/cancel-summary`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        // Update state
+        setNotes(prevNotes =>
+          prevNotes.map(note =>
+            note.id === noteId
+              ? {
+                ...note,
+                attachments: note.attachments.map(att =>
+                  att.id === attachmentId
+                    ? { ...att, summaryStatus: result.summaryStatus, summary: 'Summary generation cancelled by user' }
+                    : att
+                )
+              }
+              : note
+          )
+        );
+      }
+    } catch (error) {
+      console.error('Error cancelling summary:', error);
+    }
+  };
+
 
   const handleAttachmentClick = (attachment: Attachment) => {
     setSelectedAttachment(attachment);
@@ -361,39 +476,100 @@ function AuthenticatedApp() {
     }
   };
 
+  const [loadingMessage, setLoadingMessage] = useState('Thinking...');
+  const [isAutoFileAccessEnabled, setIsAutoFileAccessEnabled] = useState(() => {
+    const saved = localStorage.getItem('isAutoFileAccessEnabled');
+    return saved !== null ? JSON.parse(saved) : true;
+  });
+
+  useEffect(() => {
+    localStorage.setItem('isAutoFileAccessEnabled', JSON.stringify(isAutoFileAccessEnabled));
+  }, [isAutoFileAccessEnabled]);
+
   const handleSendMessage = useCallback(async (message: string, pdfContext?: string) => {
     if (!message.trim() || !activeNote) return;
     setMessages(prev => [...prev, { sender: 'user', text: message }]);
     setIsLoading(true);
     setShowBubble(false);
+    setLoadingMessage('Thinking...');
 
     try {
-      const response = await fetch(`${API_URL}/chat`, {
+      let fileNumbers: number[] = [];
+      let analyzedFiles: string[] = [];
+
+      // Logic:
+      // If Auto Access is ENABLED: Call /decide to let AI choose files.
+      // If Auto Access is DISABLED: Only use files if explicitly mentioned (pdfContext).
+
+      if (isAutoFileAccessEnabled) {
+        setLoadingMessage('Checking attachments...');
+        // Step 1: Decide if files are needed
+        const decideResponse = await fetch(`${API_URL}/chat/decide`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          body: JSON.stringify({
+            note_id: activeNoteId,
+            message: message,
+            selected_text: selectedText
+          }),
+        });
+
+        const decision = await decideResponse.json();
+
+        if (decision.need_files && decision.file_numbers && decision.file_numbers.length > 0) {
+          fileNumbers = decision.file_numbers;
+          // Get filenames for the loading message
+          const fileNames = activeNote.attachments
+            .filter((_, idx) => fileNumbers.includes(idx + 1)) // file_numbers are 1-based
+            .map(att => att.filename)
+            .join(', ');
+
+          setLoadingMessage(`Analyzing ${fileNames}...`);
+        }
+      } else {
+        // Manual Mode
+        if (pdfContext) {
+          // Find the attachment index
+          const attIndex = activeNote.attachments.findIndex(att => att.filename === pdfContext);
+          if (attIndex !== -1) {
+            fileNumbers = [attIndex + 1]; // 1-based index
+            setLoadingMessage(`Analyzing ${pdfContext}...`);
+          }
+        }
+      }
+
+      // Step 2: Generate Response (always called)
+      const response = await fetch(`${API_URL}/chat/respond`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({
           note_id: activeNoteId,
           message: message,
-          content: activeNote.content,
           mode: confirmationMode,
-          pdf_context: pdfContext,
-          selected_text: selectedText
+          selected_text: selectedText,
+          file_numbers: fileNumbers
         }),
       });
+
       const data: AIResponse = await response.json();
+
+      let responseText = data.response_text;
+
       if (data.requires_confirmation) {
         setPendingAIResponse(data);
         setShowResponseModal(true);
       } else {
         handleUpdateNote(activeNoteId, { content: data.updated_html });
-        setMessages(prev => [...prev, { sender: 'assistant', text: data.response_text }]);
+        setMessages(prev => [...prev, { sender: 'assistant', text: responseText }]);
       }
     } catch (error) {
       console.error('Error:', error);
+      setMessages(prev => [...prev, { sender: 'assistant', text: "Sorry, I encountered an error processing your request." }]);
     } finally {
       setIsLoading(false);
+      setLoadingMessage('Thinking...');
     }
-  }, [activeNote, activeNoteId, confirmationMode, token, selectedText]);
+  }, [activeNote, activeNoteId, confirmationMode, token, selectedText, isAutoFileAccessEnabled]);
 
   const handleTextSelect = useCallback((text: string, position: { x: number; y: number }) => {
     if (text.trim().length > 0) {
@@ -500,6 +676,8 @@ function AuthenticatedApp() {
                 onFileUpload={handleFileUpload}
                 onAttachmentClick={handleAttachmentClick}
                 onDeleteAttachment={handleDeleteAttachment}
+                onRegenerateSummary={handleRegenerateSummary}
+                onCancelSummary={handleCancelSummary}
               />
             ) : (
               <div className="flex flex-col items-center justify-center h-full text-gray-500 gap-4">
@@ -521,9 +699,12 @@ function AuthenticatedApp() {
             onSendMessage={handleSendMessage}
             onClearChat={handleClearChat}
             isLoading={isLoading}
+            loadingMessage={loadingMessage}
             mode={confirmationMode}
             onModeChange={setConfirmationMode}
             attachments={activeNote?.attachments || []}
+            isAutoFileAccessEnabled={isAutoFileAccessEnabled}
+            onToggleAutoFileAccess={() => setIsAutoFileAccessEnabled(prev => !prev)}
           />
         </div>
       </div>

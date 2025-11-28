@@ -60,9 +60,14 @@ When asked to beautify, format, or style, use these tags:
 - Emphasis: `<b>` or `<strong>`.
 - Lists: `<ul>` and `<li>`.
 - Colors: `<span style='color: #hexcode'>`. Palette: #60a5fa (blue), #a78bfa (purple), #f472b6 (pink), #34d399 (green), #fbbf24 (yellow).
-- Highlights: `<mark style="background-color: #ffc078; color: black;">`.
-- Fonts: `<span style="font-family: FontName">`.
-- Boxed Paragraphs: Use a `<div>` with `style="border: 1px solid #4b5563; padding: 10px; border-radius: 5px; background-color: #1f2937;"` to put a paragraph in a box.
+- Highlights: Use `<mark style="background-color: rgba(r, g, b, 0.3); color: inherit;">`.
+  - Yellow Highlight: `background-color: rgba(255, 213, 0, 0.3)`
+  - Green Highlight: `background-color: rgba(0, 255, 0, 0.2)`
+  - Blue Highlight: `background-color: rgba(0, 100, 255, 0.2)`
+  - Pink Highlight: `background-color: rgba(255, 0, 255, 0.2)`
+  - Purple Highlight: `background-color: rgba(128, 0, 128, 0.2)`
+- Fonts: `<span style="font-family: 'Inter', sans-serif">` or `<span style="font-family: 'Georgia', serif">`.
+- Boxed Paragraphs: Use a `<div>` with `style="border: 1px solid #4b5563; padding: 12px; border-radius: 8px; background-color: rgba(31, 41, 55, 0.5);"` to put a paragraph in a box.
 
 **2. CONTENT MANIPULATION GUIDE:**
 - You can re-order content. If asked to "move the last paragraph to the top," modify the order of HTML elements.
@@ -81,7 +86,67 @@ When asked to beautify, format, or style, use these tags:
 - **Never** use inline LaTeX `$ ... $` unless it is embedded strictly within a sentence and cannot be separated. But prefer block math `$$...$$` whenever possible for better visibility.
 """
 
-def chat_with_ai(user_message, note_content, confirmation_mode, chat_history=None, pdf_context_path=None, selected_text=None, pdf_filename=None):
+def decide_file_needs(user_message, note_content, attachment_summaries, selected_text=None):
+    """
+    Step 1: Decide if full files are needed based on summaries.
+    Returns: {"need_files": bool, "file_numbers": [], "reason": str}
+    """
+    if not API_KEY or not client:
+        return {"need_files": False, "error": "API Key missing"}
+
+    try:
+        # Build context with summaries
+        context = f"Current note content:\n{note_content}\n\n"
+        
+        if attachment_summaries and len(attachment_summaries) > 0:
+            context += "Available attachments (SUMMARIES ONLY):\n"
+            for idx, att in enumerate(attachment_summaries, 1):
+                status = att.get('summary_status', 'unknown')
+                if status == 'complete' and att.get('summary'):
+                    context += f"{idx}. {att['filename']}: {att['summary']}\n"
+                else:
+                    context += f"{idx}. {att['filename']}: (summary not available)\n"
+        else:
+            return {"need_files": False} # No attachments to analyze
+
+        prompt = f"""You are a smart assistant. Your ONLY job is to decide if you need to read the FULL CONTENT of any attached file to answer the user's request.
+
+{context}
+
+User Request: "{user_message}"
+Selected Text: "{selected_text if selected_text else 'None'}"
+
+INSTRUCTIONS:
+1. If the user asks to "analyse", "summarize", "explain", or "read" a specific file, you MUST request that file.
+2. If the user asks a specific question that might be in the file but not in the summary, request the file.
+3. If the summary is sufficient to answer (e.g. "what is this file about?"), do NOT request the file.
+
+Return ONLY JSON:
+{{
+  "need_files": true/false,
+  "file_numbers": [1, 2],
+  "reason": "explanation"
+}}
+"""
+        
+        response = client.models.generate_content(
+            model=MODEL_NAME,
+            contents=[prompt],
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json"
+            )
+        )
+        
+        return json.loads(clean_json_string(response.text.strip()), strict=False)
+
+    except Exception as e:
+        print(f"DEBUG: Error in decide_file_needs: {e}")
+        return {"need_files": False, "error": str(e)}
+
+def generate_ai_response(user_message, note_content, confirmation_mode, chat_history=None, full_file_contents=None, selected_text=None):
+    """
+    Step 2: Generate final response using full content (if provided).
+    """
     if not API_KEY or not client:
         return {
             "response_text": "Error: Gemini API Key not configured.",
@@ -90,163 +155,60 @@ def chat_with_ai(user_message, note_content, confirmation_mode, chat_history=Non
         }
 
     try:
-        print(f"DEBUG: Starting chat_with_ai. Message: {user_message[:50]}...")
-        # Read PDF if provided
-        pdf_part = None
-        upload_error = None
-        if pdf_context_path:
-            print(f"DEBUG: Processing PDF context: {pdf_context_path}")
-            try:
-                print(f"DEBUG: Reading PDF bytes: {pdf_context_path}")
-                with open(pdf_context_path, 'rb') as f:
-                    pdf_data = f.read()
-                pdf_part = types.Part.from_bytes(
-                    data=pdf_data,
-                    mime_type='application/pdf'
-                )
-                print(f"DEBUG: PDF loaded successfully into Part")
-            except Exception as e:
-                print(f"DEBUG: Error reading PDF: {e}")
-                upload_error = str(e)
-
-        # --- First Pass: Decide if a tool is needed or if final response can be generated directly ---
-        print("DEBUG: Preparing first pass prompt")
-        initial_decision_prompt = f"""You are a powerful writing assistant. Your first job is to decide if you have enough information to respond to the user's request directly, or if you need to use a tool.
-
-        You have one tool available:
-        - `google_search`: Use this to find current information, facts, or data you don't know.
-
-        Analyze the user's request.
-        - If you need to search, you MUST return a single, valid JSON object with ONLY the following schema. Do not include any other text, explanations, or markdown.
-          {{ "action": "tool_use", "tool": "google_search", "query": "your search query here" }}
-        - If you can respond directly using the provided note content and your internal knowledge, you MUST return a single, valid JSON object with ONLY the following schema. Do not include any other text, explanations, or markdown.
-          {{ "action": "generate_response" }}
-
-        USER'S REQUEST:
-        "{user_message}"
+        contents = []
         
-        CURRENT NOTE CONTENT:
-        ```html
-        {note_content}
-        ```
+        # Add full file contents if available
+        if full_file_contents:
+            contents.extend(full_file_contents)
 
-        USER SELECTED TEXT (The user might be referring to this):
-        "{selected_text if selected_text else 'No text selected'}"
 
-        PDF CONTEXT:
-        { f"A PDF file named '{pdf_filename}' has been attached for context." if pdf_part else f"No PDF uploaded. {(f'(Upload Error: {upload_error})' if upload_error else '')}" }
-        """
+        prompt = f"""{BASE_PROMPT_CAPABILITIES}
+
+Current note content:
+```html
+{note_content}
+```
+
+User question: {user_message}
+Selected text: {selected_text if selected_text else 'None'}
+
+INSTRUCTIONS:
+1. Answer the user's question or perform the requested edit.
+2. If full files were provided, use them to give a detailed, accurate answer.
+3. If asked to edit, provide the full updated HTML.
+
+Return JSON:
+{{
+  "response_text": "your answer",
+  "updated_html": "updated content or same as original",
+  "requires_confirmation": false
+}}
+"""
+        contents.append(prompt)
         
-        # Prepare contents for first pass
-        first_pass_contents = []
-        if pdf_part:
-            first_pass_contents.append(pdf_part)
-        first_pass_contents.append(initial_decision_prompt)
-
-        print("DEBUG: Calling model for first pass (decision)")
-        first_response_raw = client.models.generate_content(
+        response = client.models.generate_content(
             model=MODEL_NAME,
-            contents=first_pass_contents,
+            contents=contents,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json"
             )
         )
-        print(f"DEBUG: First pass response received")
         
-        first_response_json = json.loads(first_response_raw.text.strip().replace('```json', '').replace('```', '').strip())
-
-        final_ai_prompt = ""
-        search_results_context = ""
-        response_mentions_search = False
-
-        if first_response_json.get("action") == "tool_use" and first_response_json.get("tool") == "google_search":
-            query = first_response_json.get("query")
-            if query:
-                search_results = execute_google_search(query)
-                search_results_context = f"\n\n--- SEARCH RESULTS ---\n{search_results}\n----------------------\n"
-                response_mentions_search = True
-            else:
-                # Fallback if query is missing
-                search_results_context = "\n\n--- SEARCH FAILED: Query missing ---"
-                response_mentions_search = True
+        response_json = json.loads(clean_json_string(response.text.strip()), strict=False)
         
-        # --- Second Pass: Generate Final Answer (after tool use or directly) ---
-        final_ai_prompt = f"""You are an expert writing assistant integrated into a notes application.
-        Your task is to analyze a user's request and the current note content, and then perform the requested action.
-        {BASE_PROMPT_CAPABILITIES}
-
-        You MUST return a single, valid JSON object with the following exact schema:
-        {{
-          "response_text": "A short, conversational reply to the user confirming the action you took. { '(Mention that you searched for information.)' if response_mentions_search else '' }",
-          "updated_html": "The full, new HTML content of the note after your modifications.",
-          "requires_confirmation": "A boolean (true or false) indicating if this change is significant enough to require user confirmation."
-        }}
-
-        ORIGINAL USER'S REQUEST:
-        "{user_message}"
-        
-        CURRENT NOTE CONTENT (in HTML):
-        ```html
-        {note_content}
-        ```
-
-        USER SELECTED TEXT (The user might be referring to this):
-        "{selected_text if selected_text else 'No text selected'}"
-        
-        PDF CONTEXT:
-        { f"A PDF file named '{pdf_filename}' has been attached for context." if pdf_part else f"No PDF uploaded. {(f'(Upload Error: {upload_error})' if upload_error else '')}" }
-
-        {search_results_context}
-
-        USER'S CONFIRMATION PREFERENCE: "{confirmation_mode}"
-
-        INSTRUCTIONS:
-        1.  **Analyze Request:** Understand the user's goal by matching it to the Capability Guides. Incorporate search results if provided.
-        2.  **Modify HTML:** Apply the changes to the HTML content.
-        3.  **Decide on Confirmation:** Based on the user's preference, set the `requires_confirmation` flag.
-            - `always`: set to `false`.
-            - `never`: set to `true`.
-            - `think`: set to `true` for major changes (summaries, translations, major reformatting, ToC, significant content manipulation). Set to `false` for minor changes (fixing typos, bolding a word, adding a color to a phrase).
-        4.  **Generate Reply:** Write a brief reply.
-        5.  **Format Output:** Return ONLY the valid JSON object.
-        """
-
-        # Prepare contents for second pass
-        second_pass_contents = []
-        if pdf_part:
-            second_pass_contents.append(pdf_part)
-        second_pass_contents.append(final_ai_prompt)
-
-        print("DEBUG: Calling model for second pass (final response)")
-        final_response_raw = client.models.generate_content(
-            model=MODEL_NAME,
-            contents=second_pass_contents,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json"
-            )
-        )
-        print(f"DEBUG: Second pass response received")
-        
-        final_response_json = json.loads(final_response_raw.text.strip().replace('```json', '').replace('```', '').strip())
-        
-        # Format LaTeX in updated_html
-        if "updated_html" in final_response_json:
-            final_response_json["updated_html"] = format_latex_for_tiptap(final_response_json["updated_html"])
-        
-        # Add search mention to response_text if a search was performed and not already included
-        if response_mentions_search and "searched for" not in final_response_json["response_text"].lower():
-            final_response_json["response_text"] = f"I searched for information. {final_response_json['response_text']}"
-
-        return final_response_json
+        if "updated_html" in response_json:
+            response_json["updated_html"] = format_latex_for_tiptap(response_json["updated_html"])
+            
+        return response_json
 
     except Exception as e:
-        print(f"DEBUG: Error in chat_with_ai: {e}")
-        error_response = {
+
+        return {
             "response_text": f"Sorry, I encountered an error: {str(e)}",
             "updated_html": note_content,
             "requires_confirmation": True
         }
-        return error_response
+
 
 def transcribe_audio_with_ai(audio_path):
     """Transcribe audio file using Gemini AI"""
@@ -255,7 +217,7 @@ def transcribe_audio_with_ai(audio_path):
     
     converted_path = None
     try:
-        print(f"DEBUG: Transcribing audio: {audio_path}")
+
         
         # Verify file exists
         if not os.path.exists(audio_path):
@@ -263,7 +225,7 @@ def transcribe_audio_with_ai(audio_path):
         
         # Check file size
         file_size = os.path.getsize(audio_path)
-        print(f"DEBUG: Audio file size: {file_size} bytes")
+
         
         if file_size == 0:
             raise Exception("Audio file is empty")
@@ -415,96 +377,6 @@ def clean_json_string(json_str):
             
     return "".join(result)
 
-def chat_with_ai(user_message, note_content, confirmation_mode, chat_history=None, pdf_context_path=None, selected_text=None, pdf_filename=None, available_attachments=None):
-    if not API_KEY or not client:
-        return {
-            "response_text": "Error: Gemini API Key not configured.",
-            "updated_html": note_content,
-            "requires_confirmation": True
-        }
 
-    try:
-        print(f"DEBUG: Starting chat_with_ai. Message: {user_message[:50]}...")
-        
-        # --- Single Pass: Generate Answer ---
-        contents = []
-        
-        # Load PDF if provided
-        if pdf_context_path:
-            print(f"DEBUG: Loading PDF context: {pdf_context_path}")
-            try:
-                with open(pdf_context_path, 'rb') as f:
-                    pdf_data = f.read()
-                pdf_part = types.Part.from_bytes(
-                    data=pdf_data,
-                    mime_type='application/pdf'
-                )
-                contents.append(pdf_part)
-            except Exception as e:
-                print(f"DEBUG: Error reading PDF: {e}")
-                # We continue without the PDF if it fails
 
-        # Construct Prompt
-        prompt = f"""You are an expert writing assistant.
-        {BASE_PROMPT_CAPABILITIES}
-
-        You MUST return a single, valid JSON object with the following exact schema:
-        {{
-          "response_text": "A short, conversational reply.",
-          "updated_html": "The full, new HTML content.",
-          "requires_confirmation": "boolean"
-        }}
-
-        ORIGINAL USER REQUEST:
-        "{user_message}"
-        
-        CURRENT NOTE CONTENT:
-        ```html
-        {note_content}
-        ```
-
-        USER SELECTED TEXT:
-        "{selected_text if selected_text else 'No text selected'}"
-        
-        INSTRUCTIONS:
-        1. If the user asks to edit the note, provide the FULL updated HTML in `updated_html`.
-        2. If the user asks a question, answer it in `response_text` and keep `updated_html` same as `note_content` (or empty if no change).
-        3. If `requires_confirmation` is true, the UI will ask the user to confirm changes.
-        4. Use the provided PDF context (if any) to answer questions or generate content.
-        """
-        
-        contents.append(prompt)
-
-        print("DEBUG: Calling model for response")
-        response_raw = client.models.generate_content(
-            model=MODEL_NAME,
-            contents=contents,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json"
-            )
-        )
-        
-        try:
-            response_json = json.loads(clean_json_string(response_raw.text), strict=False)
-            
-            # Format LaTeX in updated_html
-            if "updated_html" in response_json:
-                response_json["updated_html"] = format_latex_for_tiptap(response_json["updated_html"])
-
-            return response_json
-        except json.JSONDecodeError as e:
-            print(f"JSON Parse Error: {e}. Raw: {response_raw.text}")
-            return {
-                "response_text": "I encountered an error processing the response.",
-                "updated_html": note_content,
-                "requires_confirmation": False
-            }
-
-    except Exception as e:
-        print(f"DEBUG: Error in chat_with_ai: {e}")
-        error_response = {
-            "response_text": f"Sorry, I encountered an error: {str(e)}",
-            "updated_html": note_content,
-            "requires_confirmation": True
-        }
-        return error_response
+from summary_functions import generate_attachment_summary

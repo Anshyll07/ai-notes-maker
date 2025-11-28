@@ -14,17 +14,21 @@ body {
 }
 
 ::-webkit-scrollbar-track {
-  background: #111827; /* bg-dark-900 */
+  background: #111827;
+  /* bg-dark-900 */
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #374151; /* bg-dark-700 */
+  background: #374151;
+  /* bg-dark-700 */
   border-radius: 5px;
-  border: 2px solid #111827; /* Creates padding effect */
+  border: 2px solid #111827;
+  /* Creates padding effect */
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #4b5563; /* bg-dark-600 */
+  background: #4b5563;
+  /* bg-dark-600 */
 }
 
 .card-3d {
@@ -157,7 +161,6 @@ body {
 
 .ProseMirror strong {
   font-weight: 700;
-  color: #f3f4f6;
 }
 
 .ProseMirror em {
@@ -175,7 +178,8 @@ div[data-type="block-math"] {
   border: 1px solid #4b5563;
   padding: 1rem;
   border-radius: 0.5rem;
-  background-color: rgba(31, 41, 55, 0.5); /* bg-dark-800 with opacity */
+  background-color: rgba(31, 41, 55, 0.5);
+  /* bg-dark-800 with opacity */
   margin: 1rem 0;
   overflow-x: auto;
   display: flex;
@@ -249,4 +253,41 @@ div[data-type="block-math"] {
   background-color: rgba(59, 130, 246, 0.1);
   padding: 0.1rem 0.3rem;
   border-radius: 0.3rem;
+}
+
+/* AI Chat Message Styling - Enforce Colors with Legacy Palette */
+.ai-message-content h1 {
+  color: #60a5fa !important;
+  /* Legacy Blue */
+  font-size: 1.5rem;
+  font-weight: 400 !important;
+  margin-bottom: 0.5rem;
+}
+
+.ai-message-content h2 {
+  color: #a78bfa !important;
+  /* Legacy Purple */
+  font-size: 1.25rem;
+  font-weight: 400 !important;
+  margin-top: 1rem;
+  margin-bottom: 0.5rem;
+}
+
+.ai-message-content h3 {
+  color: #f472b6 !important;
+  /* Legacy Pink */
+  font-size: 1.1rem;
+  font-weight: 400 !important;
+  margin-top: 0.75rem;
+  margin-bottom: 0.25rem;
+}
+
+/* Force inner bold tags to be normal weight in headings */
+.ai-message-content h1 strong,
+.ai-message-content h1 b,
+.ai-message-content h2 strong,
+.ai-message-content h2 b,
+.ai-message-content h3 strong,
+.ai-message-content h3 b {
+  font-weight: 400 !important;
 }

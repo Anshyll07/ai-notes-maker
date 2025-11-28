@@ -30,7 +30,16 @@ export const NotesSidebar: React.FC<NotesSidebarProps> = ({
     onDeleteFolder,
     onDeleteNote
 }) => {
-    const [isOpen, setIsOpen] = useState(true);
+    const [isOpen, setIsOpen] = useState(() => {
+        const saved = localStorage.getItem('sidebarOpen');
+        return saved !== null ? JSON.parse(saved) : true;
+    });
+
+    const toggleSidebar = () => {
+        const newState = !isOpen;
+        setIsOpen(newState);
+        localStorage.setItem('sidebarOpen', JSON.stringify(newState));
+    };
     const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
     const [editingFolderId, setEditingFolderId] = useState<string | null>(null);
     const [editFolderName, setEditFolderName] = useState('');
@@ -108,7 +117,7 @@ export const NotesSidebar: React.FC<NotesSidebarProps> = ({
         <>
             <div className={`fixed left-0 top-24 bottom-0 bg-dark-800 border-r border-dark-700 z-20 transition-all duration-300 ${isOpen ? 'w-64' : 'w-12'}`}>
                 <button
-                    onClick={() => setIsOpen(!isOpen)}
+                    onClick={toggleSidebar}
                     className="absolute top-2 left-2 p-2 bg-dark-700 hover:bg-dark-600 rounded-lg transition-colors z-10"
                     title={isOpen ? 'Collapse sidebar' : 'Expand sidebar'}
                 >
