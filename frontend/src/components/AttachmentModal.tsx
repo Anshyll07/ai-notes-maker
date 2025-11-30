@@ -96,7 +96,7 @@ const AttachmentModal: React.FC<AttachmentModalProps> = ({ attachment, baseUrl, 
                                             </div>
                                         }
                                     >
-                                        {Array.from(new Array(numPages), (el, index) => (
+                                        {Array.from(new Array(numPages || 0), (_el: unknown, index: number) => (
                                             <Page
                                                 key={`page_${index + 1}`}
                                                 pageNumber={index + 1}

@@ -59,31 +59,26 @@ When asked to beautify, format, or style, use these tags:
 - Headings: `<h2>` and `<h3>`.
 - Emphasis: `<b>` or `<strong>`.
 - Lists: `<ul>` and `<li>`.
-- Colors: `<span style='color: #hexcode'>`. Palette: #60a5fa (blue), #a78bfa (purple), #f472b6 (pink), #34d399 (green), #fbbf24 (yellow).
-- Highlights: Use `<mark style="background-color: rgba(r, g, b, 0.3); color: inherit;">`.
-  - Yellow Highlight: `background-color: rgba(255, 213, 0, 0.3)`
-  - Green Highlight: `background-color: rgba(0, 255, 0, 0.2)`
-  - Blue Highlight: `background-color: rgba(0, 100, 255, 0.2)`
-  - Pink Highlight: `background-color: rgba(255, 0, 255, 0.2)`
-  - Purple Highlight: `background-color: rgba(128, 0, 128, 0.2)`
-- Fonts: `<span style="font-family: 'Inter', sans-serif">` or `<span style="font-family: 'Georgia', serif">`.
-- Boxed Paragraphs: Use a `<div>` with `style="border: 1px solid #4b5563; padding: 12px; border-radius: 8px; background-color: rgba(31, 41, 55, 0.5);"` to put a paragraph in a box.
 
-**2. CONTENT MANIPULATION GUIDE:**
-- You can re-order content. If asked to "move the last paragraph to the top," modify the order of HTML elements.
+    **6. IMAGE SEARCH GUIDELINES:**
+    - To insert a SINGLE image, use the placeholder: {{IMAGE: search_query}}
+    - To insert a GALLERY (collage of 4 images), use: {{GALLERY: search_query}}
+    - To insert a ROW of images (side-by-side in one line), use: {{ROW: search_query}}
+    - Use {{ROW: ...}} when the user asks for "images in one line", "side-by-side", or "horizontal list".
+    - The frontend will automatically arrange them in a scrollable row.
+    - Do NOT provide image URLs directly.
+    - Example: "Here is a row of cars: {{ROW: luxury cars}}"
 
-**3. CONTENT GENERATION & STRUCTURING GUIDE:**
-- **Table of Contents:** If asked to "create a table of contents," find all `<h2>` and `<h3>` tags. Then, insert an unordered list at the top of the document with plain text list items, each containing the text of a heading. DO NOT use `<a>` tags or any linking mechanism.
-- **Structured Formatting:** If asked to "format this as a pros and cons list," restructure the user's text into a two-column HTML table or two distinct lists with `<h2>` headings for "Pros" and "Cons".
-
-**4. CONTENT TRANSFORMATION GUIDE:**
-- **Tone & Persona:** If asked to "make this sound more formal" or "explain this like I'm five," rewrite the text content while preserving the HTML structure as much as possible.
-- **Translation:** If asked to "translate this to Spanish," translate the text within the HTML tags, leaving the tags themselves in English.
-
-**5. MATH FORMATTING GUIDE:**
-- **Always** put every mathematical formula on its own new line.
-- **Always** use block LaTeX syntax `$$...$$` for every formula, even simple ones like `$$x=y$$`.
-- **Never** use inline LaTeX `$ ... $` unless it is embedded strictly within a sentence and cannot be separated. But prefer block math `$$...$$` whenever possible for better visibility.
+    **CRITICAL INSTRUCTION ON IMAGE USAGE:**
+    - You HAVE the capability to search for images.
+    - You SHOULD search for images when they add value to the content (e.g., explaining a concept, showing an object).
+    - You MUST NOT search for images for every single response. If the user's request is simple conversation (e.g., "Hello", "Thanks") or purely text-based, DO NOT insert images.
+    - Be judicious. Only use image search when the user explicitly requests it. {like he says to add image for better understanding}
+    - **NEGATIVE CONSTRAINTS:**
+        - If the user asks to "color", "highlight", "bold", "format", or "style" text, DO NOT search for images.
+        - If the user provides a code snippet or text and asks to "fix", "explain", or "modify" it, DO NOT search for images unless explicitly asked.
+        - Focus on the TEXT manipulation for these requests.
+    
 """
 
 def decide_file_needs(user_message, note_content, attachment_summaries, selected_text=None):
@@ -143,9 +138,10 @@ Return ONLY JSON:
         print(f"DEBUG: Error in decide_file_needs: {e}")
         return {"need_files": False, "error": str(e)}
 
-def generate_ai_response(user_message, note_content, confirmation_mode, chat_history=None, full_file_contents=None, selected_text=None):
+def generate_ai_response(user_message, note_content, confirmation_mode, chat_history=None, file_attachments=None, selected_text=None):
     """
-    Step 2: Generate final response using full content (if provided).
+    Step 2: Generate final response using full file content (if provided).
+    file_attachments: List of dicts with 'file_path' and 'filetype'
     """
     if not API_KEY or not client:
         return {
@@ -158,11 +154,77 @@ def generate_ai_response(user_message, note_content, confirmation_mode, chat_his
         contents = []
         
         # Add full file contents if available
-        if full_file_contents:
-            contents.extend(full_file_contents)
+        if file_attachments:
+            print(f"DEBUG: Processing {len(file_attachments)} attachments")
+            import mimetypes
+            for attachment in file_attachments:
+                file_path = attachment.get('file_path')
+                filetype = attachment.get('filetype')
+                print(f"DEBUG: Checking attachment: {file_path} ({filetype})")
+                
+                if not file_path or not os.path.exists(file_path):
+                    print(f"DEBUG: File not found: {file_path}")
+                    continue
+                
+                # Read file bytes
+                with open(file_path, 'rb') as f:
+                    file_data = f.read()
+                print(f"DEBUG: Read {len(file_data)} bytes from {file_path}")
+                
+                # Determine MIME type
+                if filetype == 'pdf':
+                    mime_type = 'application/pdf'
+                elif filetype == 'image':
+                    mime_type, _ = mimetypes.guess_type(file_path)
+                    if not mime_type or not mime_type.startswith('image/'):
+                        ext = file_path.lower().split('.')[-1]
+                        mime_map = {'png': 'image/png', 'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 
+                                   'gif': 'image/gif', 'webp': 'image/webp'}
+                        mime_type = mime_map.get(ext, 'image/jpeg')
+                else:
+                    print(f"DEBUG: Skipping unsupported filetype: {filetype}")
+                    continue
+                
+                if len(file_data) == 0:
+                    print(f"DEBUG: File is empty: {file_path}")
+                    continue
 
+                print(f"DEBUG: Adding part with mime_type: {mime_type}")
+                # Add file as Part.from_bytes (same as summary generation)
+                contents.append(
+                    types.Part.from_bytes(
+                        data=file_data,
+                        mime_type=mime_type,
+                    )
+                )
+        else:
+            print("DEBUG: No file_attachments provided to generate_ai_response")
+
+
+        file_context_msg = ""
+        if file_attachments:
+            file_names = [att.get('filename', 'unknown') for att in file_attachments]
+            file_context_msg = f"""
+IMPORTANT SYSTEM INSTRUCTION:
+I have attached {len(file_attachments)} file(s) to this request: {', '.join(file_names)}.
+These files are provided as 'Part' objects in this request.
+You HAVE access to them.
+The user is asking about these specific files.
+When the user mentions "{file_names[0]}" or similar, they are referring to the attached file content.
+You MUST read the attached file content and answer the user's question based on it.
+DO NOT refuse. DO NOT say you cannot access local files. The files are RIGHT HERE in the context.
+"""
+
+        # Format chat history
+        chat_history_str = ""
+        if chat_history:
+            for msg in chat_history:
+                sender = "User" if msg.get('sender') == 'user' else "Assistant"
+                chat_history_str += f"{sender}: {msg.get('text')}\n"
 
         prompt = f"""{BASE_PROMPT_CAPABILITIES}
+
+{file_context_msg}
 
 Current note content:
 ```html
@@ -172,17 +234,40 @@ Current note content:
 User question: {user_message}
 Selected text: {selected_text if selected_text else 'None'}
 
+Chat History:
+{chat_history_str}
+
 INSTRUCTIONS:
 1. Answer the user's question or perform the requested edit.
-2. If full files were provided, use them to give a detailed, accurate answer.
+2. The user has explicitly attached files. You MUST read them and use their FULL CONTENT.
 3. If asked to edit, provide the full updated HTML.
 
 Return JSON:
 {{
   "response_text": "your answer",
-  "updated_html": "updated content or same as original",
+  "updated_html": "FULL updated content (always provide this as backup)",
+  "changes": [
+      {{
+          "find": "exact unique string to replace",
+          "replace": "new string"
+      }}
+  ],
   "requires_confirmation": false
-}}
+**CRITICAL INSTRUCTION FOR EDITS:**
+- **PRIORITIZE using the `changes` list.**
+- UNLESS you are rewriting the ENTIRE document from scratch, you MUST use `changes`.
+- Even for large sections, if you can identify specific blocks to replace, use `changes`.
+- The `find` string must be UNIQUE and EXACTLY match the existing HTML.
+- The `replace` string is what it should become.
+- **Why?** This prevents overwriting the user's work if they type while you are thinking.
+- ONLY use `updated_html` (with empty `changes`) if the edit is so complex that find/replace is impossible.
+
+**CONCURRENT EDIT AWARENESS:**
+
+- To ensure your changes merge correctly with their new edits:
+    1. **Minimize your edit footprint.** Only change exactly what is requested. Do not reformat surrounding text.
+    2. **Preserve context.** Keep unique identifiers or surrounding phrases intact so the system can locate the correct place to apply changes.
+    3. **Do not undo user actions.** If the user asks you to do something, but the text implies they might have already started doing it, be careful not to duplicate or mess it up.
 """
         contents.append(prompt)
         
@@ -196,6 +281,18 @@ Return JSON:
         
         response_json = json.loads(clean_json_string(response.text.strip()), strict=False)
         
+        # Handle case where AI returns a list instead of a dict
+        if isinstance(response_json, list):
+            if len(response_json) > 0 and isinstance(response_json[0], dict):
+                response_json = response_json[0]
+            else:
+                # Fallback if list is empty or doesn't contain dict
+                return {
+                    "response_text": "I understood your request but generated an unexpected response format. Please try again.",
+                    "updated_html": note_content,
+                    "requires_confirmation": False
+                }
+
         if "updated_html" in response_json:
             response_json["updated_html"] = format_latex_for_tiptap(response_json["updated_html"])
             
@@ -284,32 +381,7 @@ def transcribe_audio_with_ai(audio_path):
         
         raise Exception(f"Transcription failed: {str(e)}")
 
-def summarize_pdf(file_path):
-    """Generates a summary of the PDF content using Gemini."""
-    if not API_KEY or not client:
-        return "Summary unavailable (API Key missing)."
-    
-    try:
-        print(f"DEBUG: Summarizing PDF: {file_path}")
-        with open(file_path, 'rb') as f:
-            pdf_data = f.read()
-        
-        pdf_part = types.Part.from_bytes(
-            data=pdf_data,
-            mime_type='application/pdf'
-        )
-        
-        prompt = "Please provide a concise summary of this document (max 2-3 sentences) describing what it contains. This summary will be used to decide if this document is relevant to a user's query."
-        
-        response = client.models.generate_content(
-            model=MODEL_NAME,
-            contents=[prompt, pdf_part]
-        )
-        
-        return response.text.strip()
-    except Exception as e:
-        print(f"Error summarizing PDF: {e}")
-        return "Summary unavailable (Error)."
+
 
 def clean_json_string(json_str):
     """Cleans a JSON string by removing control characters and markdown formatting."""

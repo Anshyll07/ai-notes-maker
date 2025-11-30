@@ -1,4 +1,4 @@
-from flask import Blueprint, request, jsonify, send_from_directory
+from flask import Blueprint, request, jsonify, send_file, send_from_directory
 from services import decide_file_needs, generate_ai_response, extract_text_from_pdf, generate_attachment_summary
 from models import db, User, Note, ChatMessage, Folder, Attachment
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
@@ -9,6 +9,9 @@ import os
 import json
 import threading
 from werkzeug.utils import secure_filename
+from google import genai
+from google.genai import types
+import mimetypes
 
 api_bp = Blueprint('api', __name__)
 bcrypt = Bcrypt()
@@ -168,6 +171,8 @@ def cleanup_attachment_files(attachment):
     except Exception as e:
         print(f"Error deleting file {attachment.filepath}: {e}")
 
+import re
+
 @api_bp.route('/notes/<note_id>', methods=['DELETE'])
 @jwt_required()
 def delete_note(note_id):
@@ -177,13 +182,75 @@ def delete_note(note_id):
     if not note:
         return jsonify({'error': 'Note not found'}), 404
     
-    # Delete attachment files from disk
+    # 1. Delete attachment files from disk
     for attachment in note.attachments:
         cleanup_attachment_files(attachment)
+
+    # 2. Delete AI-downloaded images from disk
+    # Find all image src in content that match /api/downloaded_images/
+    if note.content:
+        # Regex to find src="/api/downloaded_images/filename.ext"
+        # Matches: src=".../api/downloaded_images/..."
+        matches = re.findall(r'src="[^"]*/api/downloaded_images/([^"]+)"', note.content)
+        
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        download_dir = os.path.join(base_dir, "downloaded_images")
+        
+        for filename in matches:
+            try:
+                # Security check: ensure filename is just a filename, no path traversal
+                safe_filename = secure_filename(filename)
+                file_path = os.path.join(download_dir, safe_filename)
+                
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                    print(f"Cleaned up image: {safe_filename}")
+            except Exception as e:
+                print(f"Error cleaning up image {filename}: {e}")
         
     db.session.delete(note)
     db.session.commit()
     return jsonify({'message': 'Note deleted'}), 200
+
+@api_bp.route('/cleanup-images', methods=['POST'])
+def cleanup_images():
+    """
+    Deletes a list of images from the downloaded_images directory.
+    Expects JSON: { "urls": ["http://.../filename.jpg", ...] }
+    """
+    try:
+        data = request.get_json()
+        urls = data.get('urls', [])
+        
+        if not urls:
+            return jsonify({'message': 'No URLs provided'}), 200
+            
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        download_dir = os.path.join(base_dir, "downloaded_images")
+        
+        deleted_count = 0
+        
+        for url in urls:
+            try:
+                # Extract filename from URL
+                # URL format: .../api/downloaded_images/filename.ext
+                if '/api/downloaded_images/' in url:
+                    filename = url.split('/api/downloaded_images/')[-1]
+                    safe_filename = secure_filename(filename)
+                    file_path = os.path.join(download_dir, safe_filename)
+                    
+                    if os.path.exists(file_path):
+                        os.remove(file_path)
+                        deleted_count += 1
+                        print(f"Cleanup: Deleted {safe_filename}")
+            except Exception as e:
+                print(f"Error deleting {url}: {e}")
+                
+        return jsonify({'message': f'Cleaned up {deleted_count} images'}), 200
+        
+    except Exception as e:
+        print(f"Cleanup failed: {e}")
+        return jsonify({'error': str(e)}), 500
 
 @api_bp.route('/notes/<note_id>/attachments', methods=['POST'])
 @jwt_required()
@@ -545,10 +612,7 @@ def delete_folder(folder_id):
     db.session.commit()
     return jsonify({'message': 'Folder deleted'}), 200
 
-@api_bp.route('/upload_pdf', methods=['POST'])
-def upload_pdf():
-    """Legacy endpoint for PDF uploads"""
-    return upload_file()
+
 
 @api_bp.route('/upload_file', methods=['POST'])
 def upload_file():
@@ -637,6 +701,110 @@ def chat_decide():
         print(f"AI Decision Error: {e}")
         return jsonify({'error': str(e)}), 500
 
+# --- Image Search Endpoint ---
+from image_search import search_and_download_images
+
+@api_bp.route('/search-images', methods=['POST'])
+def search_images():
+    try:
+        data = request.get_json()
+        query = data.get('query')
+        limit = data.get('limit', 5)
+        
+        if not query:
+            return jsonify({"error": "Query is required"}), 400
+            
+        # Define save folder relative to backend
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        save_folder = os.path.join(base_dir, "downloaded_images")
+        
+        images = search_and_download_images(query, limit, save_folder)
+        
+        # Construct full URLs for the frontend
+        # Assuming backend is running on localhost:5000
+        base_url = request.host_url.rstrip('/')
+        for img in images:
+            img['url'] = f"{base_url}/api/downloaded_images/{img['filename']}"
+            
+        return jsonify({"images": images}), 200
+        
+    except Exception as e:
+        print(f"Error in search_images: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@api_bp.route('/ai-replace-image', methods=['POST'])
+def ai_replace_image():
+    print("DEBUG: /ai-replace-image endpoint hit!")
+    try:
+        if 'file' not in request.files:
+            print("DEBUG: No file part in request")
+            return jsonify({'error': 'No file part'}), 400
+        
+        file = request.files['file']
+        if file.filename == '':
+            print("DEBUG: No selected file")
+            return jsonify({'error': 'No selected file'}), 400
+
+        print(f"DEBUG: Received file: {file.filename}")
+
+        # Read file bytes
+        image_bytes = file.read()
+        mime_type = file.mimetype or mimetypes.guess_type(file.filename)[0] or 'image/jpeg'
+
+        # 1. Analyze image with Gemini
+        try:
+            # Check for API Key
+            api_key = os.environ.get("GEMINI_API_KEY")
+            if not api_key:
+                print("WARNING: GEMINI_API_KEY not found in environment variables.")
+                # You might want to return an error or use a fallback if possible, 
+                # but for now we'll proceed and let the client fail if it needs auth.
+            
+            client = genai.Client(api_key=api_key)
+            response = client.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=[
+                    types.Part.from_bytes(
+                        data=image_bytes,
+                        mime_type=mime_type,
+                    ),
+                    'Describe this image in a concise search query (max 5-7 words) to find similar images on the web. Return ONLY the search query.'
+                ]
+            )
+            search_query = response.text.strip()
+            print(f"Gemini generated search query: {search_query}")
+            
+        except Exception as e:
+            print(f"Gemini Analysis Failed: {e}")
+            return jsonify({'error': f"AI Analysis failed: {str(e)}"}), 500
+
+        # 2. Search for images
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        save_folder = os.path.join(base_dir, "downloaded_images")
+        
+        # Use existing search function
+        images = search_and_download_images(search_query, limit=6, save_folder=save_folder)
+        
+        # Construct URLs
+        base_url = request.host_url.rstrip('/')
+        for img in images:
+            img['url'] = f"{base_url}/api/downloaded_images/{img['filename']}"
+            
+        return jsonify({
+            "query": search_query,
+            "images": images
+        }), 200
+
+    except Exception as e:
+        print(f"Error in ai_replace_image: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@api_bp.route('/downloaded_images/<path:filename>')
+def serve_downloaded_image(filename):
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    directory = os.path.join(base_dir, "downloaded_images")
+    return send_from_directory(directory, filename)
+
 @api_bp.route('/chat/respond', methods=['POST'])
 @jwt_required()
 def chat_respond():
@@ -654,19 +822,30 @@ def chat_respond():
     if not note:
         return jsonify({'error': 'Note not found'}), 404
 
-    # Get chat history
-    history = ChatMessage.query.filter_by(note_id=note_id).order_by(ChatMessage.timestamp.asc()).all()
+    # Get chat history (last 100 messages)
+    history = ChatMessage.query.filter_by(note_id=note_id).order_by(ChatMessage.timestamp.desc()).limit(100).all()
+    history = history[::-1] # Reverse to chronological order
+    
+    # Check if the user message was already saved (e.g. by /chat/decide)
+    # We look at the last message from the user.
+    last_user_msg = ChatMessage.query.filter_by(note_id=note_id, sender='user').order_by(ChatMessage.timestamp.desc()).first()
+    
+    if not last_user_msg or last_user_msg.text != user_message:
+        # Save user message if it's missing or different
+        user_chat_message = ChatMessage(note_id=note_id, sender='user', text=user_message)
+        db.session.add(user_chat_message)
+        db.session.commit()
+        # Refresh history to include the new message
+        history = ChatMessage.query.filter_by(note_id=note_id).order_by(ChatMessage.timestamp.asc()).all()
+
     chat_history = [{'sender': msg.sender, 'text': msg.text} for msg in history]
 
-    # Load requested files
+    # Build file attachments list with paths
     attachments = Attachment.query.filter_by(note_id=note_id).all()
-    full_file_contents = []
+    file_attachments = []
     analyzed_files = []
 
     try:
-        from google.genai import types
-        import mimetypes
-
         for num in file_numbers:
             if 0 < num <= len(attachments):
                 att = attachments[num - 1]
@@ -674,20 +853,11 @@ def chat_respond():
                 
                 if os.path.exists(file_path):
                     analyzed_files.append(att.filename)
-                    with open(file_path, 'rb') as f:
-                        file_data = f.read()
-                    
-                    if att.filetype == 'pdf':
-                        full_file_contents.append(types.Part.from_bytes(
-                            data=file_data,
-                            mime_type='application/pdf'
-                        ))
-                    elif att.filetype == 'image':
-                        mime_type, _ = mimetypes.guess_type(file_path)
-                        full_file_contents.append(types.Part.from_bytes(
-                            data=file_data,
-                            mime_type=mime_type or 'image/jpeg'
-                        ))
+                    file_attachments.append({
+                        'file_path': file_path,
+                        'filetype': att.filetype,
+                        'filename': att.filename
+                    })
 
         from services import generate_ai_response
         response_data = generate_ai_response(
@@ -695,7 +865,7 @@ def chat_respond():
             note.content, 
             mode, 
             chat_history, 
-            full_file_contents=full_file_contents,
+            file_attachments=file_attachments,
             selected_text=selected_text
         )
         

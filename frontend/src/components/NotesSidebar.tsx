@@ -43,6 +43,8 @@ export const NotesSidebar: React.FC<NotesSidebarProps> = ({
     const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
     const [editingFolderId, setEditingFolderId] = useState<string | null>(null);
     const [editFolderName, setEditFolderName] = useState('');
+    const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
+    const [editNoteTitle, setEditNoteTitle] = useState('');
     const [draggedNote, setDraggedNote] = useState<string | null>(null);
     const [folderContextMenu, setFolderContextMenu] = useState<{ folderId: string; x: number; y: number } | null>(null);
     const [noteContextMenu, setNoteContextMenu] = useState<{ noteId: string; x: number; y: number } | null>(null);
@@ -72,6 +74,19 @@ export const NotesSidebar: React.FC<NotesSidebarProps> = ({
             onUpdateFolder(editingFolderId, { name: editFolderName.trim() });
         }
         setEditingFolderId(null);
+    };
+
+    const startEditingNote = (note: Note) => {
+        setEditingNoteId(note.id);
+        setEditNoteTitle(note.title);
+        setNoteContextMenu(null);
+    };
+
+    const saveNoteTitle = () => {
+        if (editingNoteId && editNoteTitle.trim()) {
+            onUpdateNote(editingNoteId, { title: editNoteTitle.trim() });
+        }
+        setEditingNoteId(null);
     };
 
     const handleDragStart = (noteId: string) => {
@@ -207,7 +222,25 @@ export const NotesSidebar: React.FC<NotesSidebarProps> = ({
                                                         >
                                                             <div className="flex items-center gap-2">
                                                                 <span className="text-sm">{note.icon || '📝'}</span>
-                                                                <span className="text-xs text-white truncate flex-1">{note.title}</span>
+                                                                {editingNoteId === note.id ? (
+                                                                    <input
+                                                                        autoFocus
+                                                                        type="text"
+                                                                        value={editNoteTitle}
+                                                                        onChange={(e) => setEditNoteTitle(e.target.value)}
+                                                                        onBlur={saveNoteTitle}
+                                                                        onKeyDown={(e) => e.key === 'Enter' && saveNoteTitle()}
+                                                                        className="flex-1 bg-transparent border-none outline-none text-xs text-white"
+                                                                        onClick={(e) => e.stopPropagation()}
+                                                                    />
+                                                                ) : (
+                                                                    <span
+                                                                        className="text-xs text-white truncate flex-1"
+                                                                        onDoubleClick={() => startEditingNote(note)}
+                                                                    >
+                                                                        {note.title}
+                                                                    </span>
+                                                                )}
                                                             </div>
                                                         </div>
                                                     ))}
@@ -246,7 +279,25 @@ export const NotesSidebar: React.FC<NotesSidebarProps> = ({
                                     >
                                         <div className="flex items-center gap-2 mb-1">
                                             <span className="text-lg">{note.icon || '📝'}</span>
-                                            <span className="text-sm font-medium text-white truncate flex-1">{note.title}</span>
+                                            {editingNoteId === note.id ? (
+                                                <input
+                                                    autoFocus
+                                                    type="text"
+                                                    value={editNoteTitle}
+                                                    onChange={(e) => setEditNoteTitle(e.target.value)}
+                                                    onBlur={saveNoteTitle}
+                                                    onKeyDown={(e) => e.key === 'Enter' && saveNoteTitle()}
+                                                    className="flex-1 bg-transparent border-none outline-none text-sm font-medium text-white"
+                                                    onClick={(e) => e.stopPropagation()}
+                                                />
+                                            ) : (
+                                                <span
+                                                    className="text-sm font-medium text-white truncate flex-1"
+                                                    onDoubleClick={() => startEditingNote(note)}
+                                                >
+                                                    {note.title}
+                                                </span>
+                                            )}
                                         </div>
                                         <div className="text-xs text-gray-500">
                                             {formatDate(note.updatedAt)}
@@ -379,14 +430,62 @@ export const NotesSidebar: React.FC<NotesSidebarProps> = ({
                                         </div>
                                     </div>
 
-                                    <div className="pt-2 border-t border-dark-600">
+                                    <div className="pt-2 border-t border-dark-600 space-y-1">
+                                        <button
+                                            onClick={() => getContextNote() && startEditingNote(getContextNote()!)}
+                                            className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-300 hover:bg-dark-700 rounded transition-colors text-left"
+                                        >
+                                            <Edit2 size={14} /> Rename
+                                        </button>
+
+                                        <div className="h-px bg-dark-700 my-1" />
+
+                                        <div className="flex items-center gap-2 px-3 py-1 text-xs text-gray-500 font-medium">
+                                            <Palette size={12} /> Color
+                                        </div>
+                                        <div className="grid grid-cols-4 gap-1 px-2 pb-2">
+                                            {COLORS.map(color => (
+                                                <button
+                                                    key={color}
+                                                    onClick={() => {
+                                                        onUpdateNote(noteContextMenu.noteId, { color });
+                                                        setNoteContextMenu(null);
+                                                    }}
+                                                    className="w-6 h-6 rounded-full border border-dark-600 hover:scale-110 transition-transform"
+                                                    style={{ backgroundColor: color }}
+                                                />
+                                            ))}
+                                        </div>
+
+                                        <div className="h-px bg-dark-700 my-1" />
+
+                                        <div className="flex items-center gap-2 px-3 py-1 text-xs text-gray-500 font-medium">
+                                            <Smile size={12} /> Icon
+                                        </div>
+                                        <div className="grid grid-cols-4 gap-1 px-2 pb-2">
+                                            {ICONS.map(icon => (
+                                                <button
+                                                    key={icon}
+                                                    onClick={() => {
+                                                        onUpdateNote(noteContextMenu.noteId, { icon });
+                                                        setNoteContextMenu(null);
+                                                    }}
+                                                    className="w-6 h-6 flex items-center justify-center hover:bg-dark-700 rounded text-sm transition-colors"
+                                                >
+                                                    {icon}
+                                                </button>
+                                            ))}
+                                        </div>
+
+                                        <div className="h-px bg-dark-700 my-1" />
+
                                         <button
                                             onClick={() => {
                                                 const note = getContextNote()!;
                                                 setDeleteConfirmation({ noteId: note.id, noteName: note.title });
                                                 setNoteContextMenu(null);
                                             }}
-                                            className="w-full flex items-center justify-center gap-2 px-3 py-2 text-sm text-red-400 hover:bg-red-500/10 rounded transition-colors"
+                                            className="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-400 hover:bg-red-500/10 rounded transition-colors text-left"
                                         >
                                             <Trash2 size={14} /> Delete Note
                                         </button>

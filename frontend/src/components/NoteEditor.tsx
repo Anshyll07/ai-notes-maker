@@ -1,4 +1,4 @@
-import React, { useRef, MouseEvent, useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 
 interface NoteEditorProps {
@@ -6,7 +6,7 @@ interface NoteEditorProps {
     value: string;
     onChange: (value: string) => void;
     attachments: any[];
-    onFileUpload: (file: File, noteId:string) => void;
+    onFileUpload: (file: File, noteId: string) => void;
     onAttachmentClick: (attachment: any) => void;
 }
 
@@ -14,7 +14,7 @@ const NoteEditor: React.FC<NoteEditorProps> = ({ noteId, value, onChange, attach
     const fileInputRef = useRef<HTMLInputElement>(null);
     const [zoom, setZoom] = useState(1);
 
-    const handleFileButtonClick = (event: MouseEvent<HTMLButtonElement>) => {
+    const handleFileButtonClick = (event: React.MouseEvent<HTMLButtonElement>) => {
         event.preventDefault(); // Prevent form submission
         fileInputRef.current?.click();
     };
@@ -52,7 +52,14 @@ const NoteEditor: React.FC<NoteEditorProps> = ({ noteId, value, onChange, attach
                 >
                     Attach File
                 </button>
-                            <textarea
+                <input
+                    type="file"
+                    ref={fileInputRef}
+                    onChange={handleFileChange}
+                    className="hidden"
+                />
+            </div>
+            <textarea
                 className="w-full h-[calc(100%-10rem)] bg-dark-900 text-gray-300 p-4 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all duration-300"
                 placeholder="Start typing your notes here..."
                 value={value}
@@ -76,7 +83,23 @@ const NoteEditor: React.FC<NoteEditorProps> = ({ noteId, value, onChange, attach
                     +
                 </button>
             </div>
-            {/* Attachments display area will go here */}
+
+            {attachments.length > 0 && (
+                <div className="mt-4 p-4 border-t border-dark-700">
+                    <h3 className="text-sm font-semibold text-gray-400 mb-2">Attachments</h3>
+                    <div className="flex flex-wrap gap-2">
+                        {attachments.map((att, index) => (
+                            <button
+                                key={index}
+                                onClick={() => onAttachmentClick(att)}
+                                className="px-3 py-1 bg-dark-700 hover:bg-dark-600 rounded-md text-sm text-blue-400 transition-colors"
+                            >
+                                {att.filename}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+            )}
         </motion.div>
     );
 };

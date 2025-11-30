@@ -1,5 +1,5 @@
-import React, { forwardRef, useEffect, useImperativeHandle, useState } from 'react';
-import { Note } from '../App';
+import { forwardRef, useEffect, useImperativeHandle, useState } from 'react';
+import type { Note } from '../App';
 
 interface MentionListProps {
     items: Note[];

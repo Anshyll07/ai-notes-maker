@@ -1,11 +1,18 @@
 import React, { useState, useRef, useEffect } from 'react';
 import VoiceRecorder from './VoiceRecorder';
+import ImageSlider from './ImageSlider';
 
 type ConfirmationMode = 'always' | 'never' | 'think';
 
 interface Message {
   sender: 'user' | 'assistant';
   text: string;
+  images?: {
+    original_url: string;
+    filename: string;
+    local_path: string;
+    url: string;
+  }[];
 }
 
 interface Attachment {
@@ -40,7 +47,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
   isAutoFileAccessEnabled,
   onToggleAutoFileAccess
 }) => {
-  const [loadingStatus, setLoadingStatus] = useState('Thinking...');
+
   const [input, setInput] = useState('');
   const [showMentionPopup, setShowMentionPopup] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
@@ -117,7 +124,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
       const mentionedAttachment = attachments.find(att => input.includes(`@${att.filename}`));
       if (mentionedAttachment) {
         pdfContext = mentionedAttachment.filename;
-        setLoadingStatus(`Analyzing ${mentionedAttachment.filename}...`);
+
       } else {
         // If no explicit mention, check if there are attachments
         // Automatically use the most recent attachment (last in the list)
@@ -127,9 +134,9 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
           // So here we just pass undefined if no explicit mention.
           // The parent will decide whether to call /decide or not.
           // But for the loading status, we should be careful.
-          setLoadingStatus('Checking attachments...');
+
         } else {
-          setLoadingStatus('Thinking...');
+
         }
       }
 
@@ -189,14 +196,19 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
                   }`}
               >
                 {msg.sender === 'assistant' ? (
-                  <div
-                    className="text-sm prose prose-invert prose-sm max-w-none ai-message-content 
-                    [&>h1]:text-2xl [&>h1]:font-normal [&>h1]:mb-4 
-                    [&>h2]:text-xl [&>h2]:font-normal [&>h2]:mt-4 [&>h2]:mb-2 
-                    [&>h3]:text-lg [&>h3]:font-normal [&>h3]:mt-3 [&>h3]:mb-1 
-                    [&>ul]:list-disc [&>ul]:pl-4 [&>li]:mb-1"
-                    dangerouslySetInnerHTML={{ __html: msg.text }}
-                  />
+                  <>
+                    <div
+                      className="text-sm prose prose-invert prose-sm max-w-none ai-message-content 
+                      [&>h1]:text-2xl [&>h1]:font-normal [&>h1]:mb-4 
+                      [&>h2]:text-xl [&>h2]:font-normal [&>h2]:mt-4 [&>h2]:mb-2 
+                      [&>h3]:text-lg [&>h3]:font-normal [&>h3]:mt-3 [&>h3]:mb-1 
+                      [&>ul]:list-disc [&>ul]:pl-4 [&>li]:mb-1"
+                      dangerouslySetInnerHTML={{ __html: msg.text }}
+                    />
+                    {msg.images && msg.images.length > 0 && (
+                      <ImageSlider images={msg.images} />
+                    )}
+                  </>
                 ) : (
                   <p className="text-sm whitespace-pre-wrap">{msg.text}</p>
                 )}
@@ -296,7 +308,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
       {showVoiceRecorder && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
           <VoiceRecorder
-            onTranscript={(text) => {
+            onTranscriptionComplete={(text) => {
               setInput(prev => prev + ' ' + text);
               setShowVoiceRecorder(false);
             }}

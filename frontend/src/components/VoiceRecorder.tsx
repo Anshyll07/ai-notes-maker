@@ -41,9 +41,9 @@ const VoiceRecorder: React.FC<VoiceRecorderProps> = ({ onTranscriptionComplete, 
                     audio: true,
                 });
 
-                const audioTracks = displayStream.getAudioTracks();
+                const audioTracks = displayStream!.getAudioTracks();
                 if (audioTracks.length === 0) {
-                    displayStream.getTracks().forEach(track => track.stop());
+                    displayStream!.getTracks().forEach(track => track.stop());
                     throw new Error('No audio track available. Please make sure to check "Share audio" or "Share tab audio" when selecting your screen!');
                 }
 

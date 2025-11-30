@@ -50,6 +50,7 @@ export const NotesBar: React.FC<NotesBarProps & { onReorder?: (newOrder: Note[])
     const [contextMenu, setContextMenu] = useState<{ x: number; y: number; noteId: string } | null>(null);
     const [editingId, setEditingId] = useState<string | null>(null);
     const [editTitle, setEditTitle] = useState('');
+    const [deleteConfirmation, setDeleteConfirmation] = useState<{ noteId: string; noteName: string } | null>(null);
     const scrollContainerRef = useRef<HTMLDivElement>(null);
 
     // Filter out notes that are hidden from top bar
@@ -235,7 +236,10 @@ export const NotesBar: React.FC<NotesBarProps & { onReorder?: (newOrder: Note[])
 
                             <button
                                 onClick={() => {
-                                    onDelete(contextMenu.noteId);
+                                    const note = visibleNotes.find(n => n.id === contextMenu.noteId);
+                                    if (note) {
+                                        setDeleteConfirmation({ noteId: note.id, noteName: note.title });
+                                    }
                                     setContextMenu(null);
                                 }}
                                 className="flex items-center gap-2 px-3 py-2 text-sm text-red-400 hover:bg-red-500/10 rounded transition-colors text-left"
@@ -244,6 +248,59 @@ export const NotesBar: React.FC<NotesBarProps & { onReorder?: (newOrder: Note[])
                             </button>
                         </div>
                     </motion.div>
+                )}
+            </AnimatePresence>
+
+            {/* Delete Confirmation Modal */}
+            <AnimatePresence>
+                {deleteConfirmation && (
+                    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4" onClick={() => setDeleteConfirmation(null)}>
+                        <div className="fixed inset-0 bg-black/50" />
+                        <motion.div
+                            initial={{ opacity: 0, scale: 0.9 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            exit={{ opacity: 0, scale: 0.9 }}
+                            className="relative bg-dark-800 border border-dark-700 rounded-lg shadow-2xl p-6 w-full max-w-md"
+                            onClick={(e) => e.stopPropagation()}
+                        >
+                            <div className="space-y-4">
+                                <div className="flex items-center gap-3">
+                                    <div className="p-2 bg-red-500/10 rounded-lg">
+                                        <Trash2 size={24} className="text-red-400" />
+                                    </div>
+                                    <div>
+                                        <h3 className="text-lg font-semibold text-white">Delete Note?</h3>
+                                        <p className="text-sm text-gray-400">This action cannot be undone</p>
+                                    </div>
+                                </div>
+
+                                <div className="p-3 bg-dark-700/50 rounded-lg">
+                                    <p className="text-sm text-gray-300">
+                                        Are you sure you want to delete <span className="font-semibold text-white">"{deleteConfirmation.noteName}"</span>?
+                                    </p>
+                                </div>
+
+                                <div className="flex gap-3 justify-end">
+                                    <button
+                                        onClick={() => setDeleteConfirmation(null)}
+                                        className="px-4 py-2 text-sm font-medium text-gray-300 bg-dark-700 hover:bg-dark-600 rounded-lg transition-colors"
+                                    >
+                                        Cancel
+                                    </button>
+                                    <button
+                                        onClick={() => {
+                                            onDelete(deleteConfirmation.noteId);
+                                            setDeleteConfirmation(null);
+                                        }}
+                                        className="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors flex items-center gap-2"
+                                    >
+                                        <Trash2 size={16} />
+                                        Delete
+                                    </button>
+                                </div>
+                            </div>
+                        </motion.div>
+                    </div>
                 )}
             </AnimatePresence>
         </div>

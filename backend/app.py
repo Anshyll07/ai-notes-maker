@@ -51,6 +51,9 @@ app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///app.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['JWT_SECRET_KEY'] = 'super-secret-key-change-this-in-prod' # Change this!
 
+from datetime import timedelta
+app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(days=365) # Infinite session (1 year)
+
 # Initialize Extensions
 db.init_app(app)
 jwt = JWTManager(app)

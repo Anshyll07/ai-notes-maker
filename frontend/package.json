@@ -10,9 +10,11 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@tiptap/extension-bubble-menu": "^3.11.1",
     "@tiptap/extension-color": "^3.11.0",
     "@tiptap/extension-font-family": "^3.11.0",
     "@tiptap/extension-highlight": "^3.11.0",
+    "@tiptap/extension-image": "^3.11.1",
     "@tiptap/extension-mathematics": "^3.11.0",
     "@tiptap/extension-mention": "^3.11.0",
     "@tiptap/extension-table": "^3.11.0",
@@ -23,6 +25,8 @@
     "@tiptap/extension-underline": "^3.11.0",
     "@tiptap/react": "^3.11.0",
     "@tiptap/starter-kit": "^3.11.0",
+    "@types/diff-match-patch": "^1.0.36",
+    "diff-match-patch": "^1.0.5",
     "framer-motion": "^12.23.24",
     "html2canvas": "^1.4.1",
     "jspdf": "^3.0.4",
@@ -32,6 +36,7 @@
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-draggable": "^4.5.0",
+    "react-easy-crop": "^5.5.6",
     "react-pdf": "^10.2.0",
     "tippy.js": "^6.3.7"
   },
